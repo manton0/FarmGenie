@@ -1,7 +1,7 @@
 ## Interface: 30300
-## Version: 0.1.0
+## Version: 0.2.0
 ## Title: FarmGenie
-## Notes: Track looted items and their auction house value while farming
+## Notes: Track looted items and their AH value while farming. Auto-delete and auto-vendor with configurable rules.
 ## Author: Discord: the_mazer
 ## OptionalDeps: Auctionator
 ## SavedVariables: GenieMinimapDB
@@ -13,3 +13,4 @@ FarmGenie.lua
 FarmGenieGUI.lua
 FarmGenieLoot.lua
 FarmGenieBar.lua
+FarmGenieFilter.lua

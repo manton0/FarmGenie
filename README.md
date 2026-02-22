@@ -1,6 +1,6 @@
 # FarmGenie
 
-A farming session tracker for the **Ascension** private server (WoW 3.3.5). FarmGenie tracks items looted during farming sessions, displays their auction house value, and shows you how much gold you're earning per hour.
+A farming session tracker for the **Ascension** private server (WoW 3.3.5). FarmGenie tracks items looted during farming sessions, displays their auction house value, and shows you how much gold you're earning per hour. It also auto-deletes junk items and auto-sells at vendors using configurable rules.
 
 ## Features
 
@@ -9,6 +9,8 @@ A farming session tracker for the **Ascension** private server (WoW 3.3.5). Farm
 - **Auction House Prices** — Integrates with Auctionator for accurate AH pricing, falls back to vendor prices
 - **Item Counter Bar** — Vertical bar of draggable item slots to track specific item counts in your bags in real-time
 - **Loot Filters** — Filter by minimum item quality and minimum AH price to keep the log clean
+- **Auto Delete** — Automatically delete items as you loot them based on quality and AH price rules (e.g., delete all greys, delete greens worth less than 2g)
+- **Auto Vendor** — Automatically sell items when you open a merchant window, with an optional confirmation popup showing what will be sold
 - **Session Management** — Start, pause, and resume sessions; auto-start option available
 - **Minimap Button** — Quick-access dropdown for Loot Log, Item Bar, Settings, and New Session
 - **Persistent Settings** — Window positions, tracked items, and preferences saved between sessions
@@ -29,8 +31,11 @@ A farming session tracker for the **Ascension** private server (WoW 3.3.5). Farm
 - `/fg new` — Start a new farming session
 - `/fg pause` — Pause logging
 - `/fg resume` — Resume logging
+- `/fg vendor` — Run auto-vendor scan (sells items matching vendor rules if at a merchant)
 - `/fg help` — Show all available commands
 - **Item Counter Bar** — Drag items from your bags into slots to track their count. Right-click a slot to remove it. Items auto-rearrange when slots are removed.
+- **Auto Delete** — Configure rules in Settings > Auto Delete. Each rule targets a quality level with an optional AH price threshold. Items are deleted as they're looted.
+- **Auto Vendor** — Configure rules in Settings > Auto Vendor. When you open a merchant window, a confirmation popup lists items to sell. Click "Sell All" to confirm or "Cancel" to skip.
 
 ## Optional Dependencies
 

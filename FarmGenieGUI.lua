@@ -11,6 +11,8 @@ local treeGroup = nil
 ---------------------------------------------------------------------------
 local DrawGeneralPanel
 local DrawFiltersPanel
+local DrawAutoDeletePanel
+local DrawAutoVendorPanel
 local DrawDebugPanel
 local DrawAboutPanel
 
@@ -21,15 +23,37 @@ local function trim(s)
    return s:match("^%s*(.-)%s*$") or s
 end
 
+--- Register a frame for Escape-key closing, avoiding duplicate entries.
+--- Call FarmGenieUnregisterESC(name) on close to clean up.
+function FarmGenieRegisterESC(name, frame)
+   _G[name] = frame
+   -- Only add if not already present
+   for _, v in ipairs(UISpecialFrames) do
+      if v == name then return end
+   end
+   tinsert(UISpecialFrames, name)
+end
+
+function FarmGenieUnregisterESC(name)
+   _G[name] = nil
+   for i = #UISpecialFrames, 1, -1 do
+      if UISpecialFrames[i] == name then
+         table.remove(UISpecialFrames, i)
+      end
+   end
+end
+
 ---------------------------------------------------------------------------
 -- Tree structure
 ---------------------------------------------------------------------------
 local function GetTreeStructure()
    return {
-      { value = "general", text = "General" },
-      { value = "filters", text = "Filters" },
-      { value = "debug",   text = "Debug" },
-      { value = "about",   text = "About" },
+      { value = "general",    text = "General" },
+      { value = "filters",    text = "Filters" },
+      { value = "autodelete", text = "Auto Delete" },
+      { value = "autovendor", text = "Auto Vendor" },
+      { value = "debug",      text = "Debug" },
+      { value = "about",      text = "About" },
    }
 end
 
@@ -43,6 +67,10 @@ local function OnGroupSelected(container, event, group)
       DrawGeneralPanel(container)
    elseif group == "filters" then
       DrawFiltersPanel(container)
+   elseif group == "autodelete" then
+      DrawAutoDeletePanel(container)
+   elseif group == "autovendor" then
+      DrawAutoVendorPanel(container)
    elseif group == "debug" then
       DrawDebugPanel(container)
    elseif group == "about" then
@@ -239,6 +267,273 @@ DrawFiltersPanel = function(container)
 end
 
 ---------------------------------------------------------------------------
+-- Shared: Draw a rule list UI for auto-delete or auto-vendor
+---------------------------------------------------------------------------
+local QUALITY_LIST = {
+   [0] = "\124cff9d9d9dPoor\124r",
+   [1] = "\124cffffffffCommon\124r",
+   [2] = "\124cff1eff00Uncommon\124r",
+   [3] = "\124cff0070ddRare\124r",
+   [4] = "\124cffa335eeEpic\124r",
+}
+local QUALITY_ORDER = { 0, 1, 2, 3, 4 }
+
+--- Draw a single rule row and return it as a group widget.
+--- onDelete: function(index) called when remove button clicked
+--- onUpdate: function(index, rule) called when rule values change
+local function DrawRuleRow(parent, index, rule, onDelete, onUpdate)
+   local row = AceGUI:Create("SimpleGroup")
+   row:SetLayout("Flow")
+   row:SetFullWidth(true)
+   parent:AddChild(row)
+
+   -- Quality dropdown
+   local qualDrop = AceGUI:Create("Dropdown")
+   qualDrop:SetLabel("Quality")
+   qualDrop:SetList(QUALITY_LIST, QUALITY_ORDER)
+   qualDrop:SetValue(rule.quality or 0)
+   qualDrop:SetWidth(130)
+   qualDrop:SetCallback("OnValueChanged", function(widget, event, value)
+      rule.quality = value
+      if onUpdate then onUpdate(index, rule) end
+   end)
+   row:AddChild(qualDrop)
+
+   -- Price condition checkbox
+   local hasPriceCond = (rule.maxPrice and rule.maxPrice > 0) and true or false
+   local priceCB = AceGUI:Create("CheckBox")
+   priceCB:SetLabel("If AH price below")
+   priceCB:SetValue(hasPriceCond)
+   priceCB:SetWidth(145)
+   row:AddChild(priceCB)
+
+   -- Price editbox
+   local priceBox = AceGUI:Create("EditBox")
+   priceBox:SetLabel("Gold")
+   priceBox:SetWidth(70)
+   priceBox:SetText(hasPriceCond and tostring(math.floor((rule.maxPrice or 0) / 10000)) or "0")
+   priceBox:SetDisabled(not hasPriceCond)
+   priceBox:SetCallback("OnEnterPressed", function(widget, event, text)
+      local gold = tonumber(text) or 0
+      if gold < 0 then gold = 0 end
+      if hasPriceCond then
+         rule.maxPrice = gold * 10000
+      end
+      widget:SetText(tostring(gold))
+      if onUpdate then onUpdate(index, rule) end
+   end)
+   row:AddChild(priceBox)
+
+   -- Wire up the checkbox to enable/disable price box
+   priceCB:SetCallback("OnValueChanged", function(widget, event, value)
+      hasPriceCond = value
+      priceBox:SetDisabled(not value)
+      if value then
+         local gold = tonumber(priceBox:GetText()) or 0
+         rule.maxPrice = gold * 10000
+      else
+         rule.maxPrice = nil
+      end
+      if onUpdate then onUpdate(index, rule) end
+   end)
+
+   -- Remove button
+   local removeBtn = AceGUI:Create("Button")
+   removeBtn:SetText("X")
+   removeBtn:SetWidth(40)
+   removeBtn:SetCallback("OnClick", function()
+      if onDelete then onDelete(index) end
+   end)
+   row:AddChild(removeBtn)
+end
+
+--- Draw the full rule list for a ruleset (delete or vendor).
+--- ruleset: reference to FarmGenieDB.deleteRules or FarmGenieDB.vendorRules
+--- redrawPanel: function() to rebuild the panel after changes
+local function DrawRuleList(scroll, ruleset, redrawPanel)
+   if not ruleset.rules or #ruleset.rules == 0 then
+      local emptyLabel = AceGUI:Create("Label")
+      emptyLabel:SetText("  No rules configured. Click 'Add Rule' to create one.")
+      emptyLabel:SetFullWidth(true)
+      emptyLabel:SetFont("Fonts\\FRIZQT__.TTF", 11)
+      scroll:AddChild(emptyLabel)
+   else
+      for i, rule in ipairs(ruleset.rules) do
+         DrawRuleRow(scroll, i, rule,
+            function(index)  -- onDelete
+               table.remove(ruleset.rules, index)
+               redrawPanel()
+            end,
+            function(index, updatedRule)  -- onUpdate (saved in-place)
+            end
+         )
+      end
+   end
+
+   -- Spacer
+   local spacer = AceGUI:Create("Label")
+   spacer:SetText(" ")
+   spacer:SetFullWidth(true)
+   scroll:AddChild(spacer)
+
+   -- Add Rule button
+   local addBtn = AceGUI:Create("Button")
+   addBtn:SetText("Add Rule")
+   addBtn:SetWidth(120)
+   addBtn:SetCallback("OnClick", function()
+      table.insert(ruleset.rules, { quality = 0 })
+      redrawPanel()
+   end)
+   scroll:AddChild(addBtn)
+
+   -- Info label
+   local infoLabel = AceGUI:Create("Label")
+   infoLabel:SetText("  Items with no AH price data are skipped when a price condition is set.\n  Quest items are never affected.")
+   infoLabel:SetFullWidth(true)
+   infoLabel:SetFont("Fonts\\FRIZQT__.TTF", 10)
+   scroll:AddChild(infoLabel)
+end
+
+---------------------------------------------------------------------------
+-- Auto Delete Panel
+---------------------------------------------------------------------------
+DrawAutoDeletePanel = function(container)
+   local scroll = AceGUI:Create("ScrollFrame")
+   scroll:SetLayout("List")
+   scroll:SetFullWidth(true)
+   scroll:SetFullHeight(true)
+   container:AddChild(scroll)
+
+   -- Header
+   local header = AceGUI:Create("Heading")
+   header:SetText("Auto Delete")
+   header:SetFullWidth(true)
+   scroll:AddChild(header)
+
+   local desc = AceGUI:Create("Label")
+   desc:SetText("  Automatically delete items from your bags as you loot them.")
+   desc:SetFullWidth(true)
+   desc:SetFont("Fonts\\FRIZQT__.TTF", 11)
+   scroll:AddChild(desc)
+
+   -- Spacer
+   local spacer = AceGUI:Create("Label")
+   spacer:SetText(" ")
+   spacer:SetFullWidth(true)
+   scroll:AddChild(spacer)
+
+   -- Ensure DB exists
+   if not FarmGenieDB.deleteRules then
+      FarmGenieDB.deleteRules = { enabled = false, rules = {} }
+   end
+
+   -- Enable checkbox
+   local enableCB = AceGUI:Create("CheckBox")
+   enableCB:SetLabel("Enable auto-delete")
+   enableCB:SetDescription("When enabled, items matching the rules below will be deleted as you loot them")
+   enableCB:SetFullWidth(true)
+   enableCB:SetValue(FarmGenieDB.deleteRules.enabled)
+   enableCB:SetCallback("OnValueChanged", function(widget, event, value)
+      FarmGenieDB.deleteRules.enabled = value
+   end)
+   scroll:AddChild(enableCB)
+
+   -- Spacer
+   local spacer2 = AceGUI:Create("Label")
+   spacer2:SetText(" ")
+   spacer2:SetFullWidth(true)
+   scroll:AddChild(spacer2)
+
+   -- Rules header
+   local rulesHeader = AceGUI:Create("Heading")
+   rulesHeader:SetText("Delete Rules")
+   rulesHeader:SetFullWidth(true)
+   scroll:AddChild(rulesHeader)
+
+   -- Draw rules with redraw callback
+   DrawRuleList(scroll, FarmGenieDB.deleteRules, function()
+      if treeGroup then
+         treeGroup:SelectByPath("autodelete")
+      end
+   end)
+end
+
+---------------------------------------------------------------------------
+-- Auto Vendor Panel
+---------------------------------------------------------------------------
+DrawAutoVendorPanel = function(container)
+   local scroll = AceGUI:Create("ScrollFrame")
+   scroll:SetLayout("List")
+   scroll:SetFullWidth(true)
+   scroll:SetFullHeight(true)
+   container:AddChild(scroll)
+
+   -- Header
+   local header = AceGUI:Create("Heading")
+   header:SetText("Auto Vendor")
+   header:SetFullWidth(true)
+   scroll:AddChild(header)
+
+   local desc = AceGUI:Create("Label")
+   desc:SetText("  Automatically sell items when you open a merchant window.")
+   desc:SetFullWidth(true)
+   desc:SetFont("Fonts\\FRIZQT__.TTF", 11)
+   scroll:AddChild(desc)
+
+   -- Spacer
+   local spacer = AceGUI:Create("Label")
+   spacer:SetText(" ")
+   spacer:SetFullWidth(true)
+   scroll:AddChild(spacer)
+
+   -- Ensure DB exists
+   if not FarmGenieDB.vendorRules then
+      FarmGenieDB.vendorRules = { enabled = false, showConfirm = true, rules = {} }
+   end
+
+   -- Enable checkbox
+   local enableCB = AceGUI:Create("CheckBox")
+   enableCB:SetLabel("Enable auto-vendor")
+   enableCB:SetDescription("When enabled, items matching the rules below will be sold at merchants")
+   enableCB:SetFullWidth(true)
+   enableCB:SetValue(FarmGenieDB.vendorRules.enabled)
+   enableCB:SetCallback("OnValueChanged", function(widget, event, value)
+      FarmGenieDB.vendorRules.enabled = value
+   end)
+   scroll:AddChild(enableCB)
+
+   -- Show confirmation checkbox
+   local confirmCB = AceGUI:Create("CheckBox")
+   confirmCB:SetLabel("Show confirmation before selling")
+   confirmCB:SetDescription("Display a window listing items to sell with a Sell All button")
+   confirmCB:SetFullWidth(true)
+   confirmCB:SetValue(FarmGenieDB.vendorRules.showConfirm)
+   confirmCB:SetCallback("OnValueChanged", function(widget, event, value)
+      FarmGenieDB.vendorRules.showConfirm = value
+   end)
+   scroll:AddChild(confirmCB)
+
+   -- Spacer
+   local spacer2 = AceGUI:Create("Label")
+   spacer2:SetText(" ")
+   spacer2:SetFullWidth(true)
+   scroll:AddChild(spacer2)
+
+   -- Rules header
+   local rulesHeader = AceGUI:Create("Heading")
+   rulesHeader:SetText("Vendor Rules")
+   rulesHeader:SetFullWidth(true)
+   scroll:AddChild(rulesHeader)
+
+   -- Draw rules with redraw callback
+   DrawRuleList(scroll, FarmGenieDB.vendorRules, function()
+      if treeGroup then
+         treeGroup:SelectByPath("autovendor")
+      end
+   end)
+end
+
+---------------------------------------------------------------------------
 -- Debug Panel
 ---------------------------------------------------------------------------
 DrawDebugPanel = function(container)
@@ -421,7 +716,7 @@ DrawAboutPanel = function(container)
       parent:AddChild(label)
    end
 
-   AddLine(scroll, "\124cffffcc00Version:\124r 0.1.0")
+   AddLine(scroll, "\124cffffcc00Version:\124r 0.2.0")
    AddLine(scroll, "\124cffffcc00Author:\124r Discord: the_mazer")
    AddLine(scroll, " ")
    AddLine(scroll, "FarmGenie tracks items you loot while farming and shows")
@@ -439,6 +734,7 @@ DrawAboutPanel = function(container)
    AddLine(scroll, "\124cffffcc00/fg new\124r — Start a new farming session")
    AddLine(scroll, "\124cffffcc00/fg pause\124r — Pause logging")
    AddLine(scroll, "\124cffffcc00/fg resume\124r — Resume logging")
+   AddLine(scroll, "\124cffffcc00/fg vendor\124r — Run auto-vendor scan now")
    AddLine(scroll, "\124cffffcc00/fg help\124r — Show available commands")
 end
 
@@ -461,10 +757,10 @@ function FarmGenieToggleMainWindow()
    mainFrame.frame:SetFrameStrata("HIGH")
 
    -- Escape key closes the window
-   _G["FarmGenieMainFrame"] = mainFrame.frame
-   tinsert(UISpecialFrames, "FarmGenieMainFrame")
+   FarmGenieRegisterESC("FarmGenieMainFrame", mainFrame.frame)
 
    mainFrame:SetCallback("OnClose", function(widget)
+      FarmGenieUnregisterESC("FarmGenieMainFrame")
       AceGUI:Release(widget)
       mainFrame = nil
       treeGroup = nil
@@ -523,6 +819,12 @@ SlashCmdList["FARMGENIE"] = function(msg)
       end
    elseif msg == "bar" then
       FarmGenieToggleBar()
+   elseif msg == "vendor" or msg == "sell" then
+      if FarmGenieProcessAutoVendor then
+         FarmGenieProcessAutoVendor()
+      else
+         FarmGeniePrint("Auto-vendor not loaded.")
+      end
    elseif msg == "help" then
       FarmGeniePrint("Commands:")
       FarmGeniePrint("  /fg — Toggle settings window")
@@ -531,6 +833,7 @@ SlashCmdList["FARMGENIE"] = function(msg)
       FarmGeniePrint("  /fg new — Start new session")
       FarmGeniePrint("  /fg pause — Pause logging")
       FarmGeniePrint("  /fg resume — Resume logging")
+      FarmGeniePrint("  /fg vendor — Run auto-vendor scan")
       FarmGeniePrint("  /fg help — Show this help")
    else
       FarmGeniePrint("Unknown command: " .. msg .. ". Type /fg help for commands.")

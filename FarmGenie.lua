@@ -392,6 +392,11 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
          FarmGenieInitBar()
       end
 
+      -- Initialize loot filter / auto-vendor
+      if FarmGenieInitFilter then
+         FarmGenieInitFilter()
+      end
+
       -- Print status
       local priceStatus = FarmGenieHasAuctionator() and "Auctionator detected" or "Auctionator not found (using vendor prices)"
       FarmGeniePrint("loaded. " .. priceStatus .. ". Type /fg for settings.")
@@ -401,6 +406,10 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
       local itemLink, quantity = ParseLootMessage(message)
       if itemLink then
          ProcessLoot(itemLink, quantity)
+         -- Auto-delete check (FarmGenieFilter.lua)
+         if FarmGenieProcessAutoDelete then
+            FarmGenieProcessAutoDelete(itemLink)
+         end
       end
 
    elseif event == "CHAT_MSG_MONEY" then
