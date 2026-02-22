@@ -1,79 +1,220 @@
 -- FarmGenie Filter
--- Auto-delete items on loot, auto-vendor at merchants, vendor confirmation popup
+-- Bag cleanup engine: keep/remove rules, auto-delete, auto-vendor, clean bags
 
 local AceGUI = LibStub("AceGUI-3.0")
 
 ---------------------------------------------------------------------------
 -- Constants
 ---------------------------------------------------------------------------
-local DELETE_QUEUE_INTERVAL = 0.5   -- seconds between delete queue checks
-local SELL_INTERVAL = 0.3           -- seconds between vendor sells
+local DELETE_QUEUE_INTERVAL = 0.5   -- seconds between delete queue ticks
+local SELL_INTERVAL = 0.3           -- seconds between vendor sell ticks
+local BANK_INTERVAL = 0.3           -- seconds between bank deposit ticks
 
 ---------------------------------------------------------------------------
 -- State
 ---------------------------------------------------------------------------
-local deleteQueue = {}              -- { { itemID = num, link = string }, ... }
+local deleteQueue = {}              -- { { itemID, link, bag?, slot? }, ... }
 local deleteElapsed = 0
-local sellQueue = {}                -- { { bag = num, slot = num, link = string, vendorPrice = num }, ... }
+local sellQueue = {}                -- { { bag, slot, link, vendorPrice, quantity, name, quality }, ... }
 local sellElapsed = 0
 local sellIndex = 0
 local isSelling = false
-local vendorConfirmFrame = nil
+local confirmFrame = nil            -- shared confirmation popup (vendor or clean or bank)
 local merchantOpen = false
 local totalSold = 0
 local totalSoldValue = 0
+local bankQueue = {}                -- { { bag, slot, link, name, quality }, ... }
+local bankElapsed = 0
+local bankIndex = 0
+local isBanking = false
+local bankOpen = false
+local totalBanked = 0
 
 ---------------------------------------------------------------------------
--- Rule Matching
+-- Soulbound Detection (tooltip scanner)
+---------------------------------------------------------------------------
+local scanTooltip = CreateFrame("GameTooltip", "FarmGenieScanTooltip", nil, "GameTooltipTemplate")
+scanTooltip:SetOwner(UIParent, "ANCHOR_NONE")
+
+function FarmGenieIsSoulbound(bag, slot)
+   scanTooltip:ClearLines()
+   scanTooltip:SetBagItem(bag, slot)
+   for i = 1, scanTooltip:NumLines() do
+      local text = _G["FarmGenieScanTooltipTextLeft" .. i]:GetText()
+      if text == ITEM_SOULBOUND then return true end
+   end
+   return false
+end
+
+---------------------------------------------------------------------------
+-- Condition Tree (shared with GUI for condition picker)
+---------------------------------------------------------------------------
+FarmGenieConditionTree = {
+   ["Quality"]      = { "equals", "not equals", "at least", "at most" },
+   ["Item Type"]    = { "equals", "not equals" },
+   ["Item Name"]    = { "contains", "not contains" },
+   ["AH Price"]     = { "above", "below" },
+   ["Vendor Price"] = { "above", "below" },
+   ["Soulbound"]    = { "is soulbound", "is not soulbound" },
+   ["Quest Item"]   = { "is quest item", "is not quest item" },
+}
+
+---------------------------------------------------------------------------
+-- Rule Matching Helpers
 ---------------------------------------------------------------------------
 
---- Check if an item matches any rule in a ruleset.
---- Returns true if matched, false otherwise.
---- @param rules table — array of { quality = num, maxPrice = num? }
---- @param itemLink string — WoW item link
-function FarmGenieMatchesRules(rules, itemLink)
-   if not rules or #rules == 0 then return false end
-   if not itemLink then return false end
-
+--- Gather all relevant item info into a single table for condition evaluation.
+local function GatherItemInfo(itemLink, bag, slot)
    local itemName, _, itemQuality, _, _, itemType = GetItemInfo(itemLink)
-   if not itemName then return false end
-   itemQuality = itemQuality or 0
-
-   -- Never match quest items
-   if itemType == "Quest" then return false end
+   if not itemName then return nil end
 
    local ahPrice, vendorPrice = FarmGenieGetItemValue(itemLink)
+   local isSoulbound = false
+   if bag and slot then
+      isSoulbound = FarmGenieIsSoulbound(bag, slot)
+   end
 
-   for _, rule in ipairs(rules) do
-      if itemQuality == rule.quality then
-         if rule.maxPrice and rule.maxPrice > 0 then
-            -- Price condition: only match if AH price is below threshold
-            -- Skip items with no AH data (safe default)
-            if ahPrice > 0 and ahPrice < rule.maxPrice then
-               return true
-            end
-         else
-            -- No price condition: match all items of this quality
-            return true
-         end
+   return {
+      name = itemName,
+      quality = itemQuality or 0,
+      itemType = itemType,
+      ahPrice = ahPrice or 0,
+      vendorPrice = vendorPrice or 0,
+      soulbound = isSoulbound,
+      questItem = (itemType == "Quest"),
+   }
+end
+
+--- Evaluate a single condition against item info.
+local function EvaluateCondition(cond, info)
+   local subject = cond.subject
+   local comparer = cond.comparer
+   local value = cond.value
+
+   if subject == "Quality" then
+      local q = info.quality
+      if comparer == "equals" then return q == value
+      elseif comparer == "not equals" then return q ~= value
+      elseif comparer == "at least" then return q >= value
+      elseif comparer == "at most" then return q <= value
+      end
+
+   elseif subject == "Item Type" then
+      local t = info.itemType or ""
+      if comparer == "equals" then return t == value
+      elseif comparer == "not equals" then return t ~= value
+      end
+
+   elseif subject == "Item Name" then
+      local n = (info.name or ""):lower()
+      local v = (value or ""):lower()
+      if comparer == "contains" then return n:find(v, 1, true) ~= nil
+      elseif comparer == "not contains" then return n:find(v, 1, true) == nil
+      end
+
+   elseif subject == "AH Price" then
+      local p = info.ahPrice or 0
+      if p <= 0 then
+         -- No AH data: "above" → true (safe for keep), "below" → false (safe for remove)
+         return comparer == "above"
+      end
+      if comparer == "above" then return p >= value
+      elseif comparer == "below" then return p < value
+      end
+
+   elseif subject == "Vendor Price" then
+      local p = info.vendorPrice or 0
+      if comparer == "above" then return p >= value
+      elseif comparer == "below" then return p < value
+      end
+
+   elseif subject == "Soulbound" then
+      if comparer == "is soulbound" then return info.soulbound == true
+      elseif comparer == "is not soulbound" then return info.soulbound ~= true
+      end
+
+   elseif subject == "Quest Item" then
+      if comparer == "is quest item" then return info.questItem == true
+      elseif comparer == "is not quest item" then return info.questItem ~= true
       end
    end
 
    return false
 end
 
+--- Check if all conditions in a rule match (AND logic).
+local function MatchesRule(rule, info)
+   if not rule.conditions or #rule.conditions == 0 then
+      return true  -- No conditions = matches everything
+   end
+   for _, cond in ipairs(rule.conditions) do
+      if not EvaluateCondition(cond, info) then
+         return false
+      end
+   end
+   return true
+end
+
 ---------------------------------------------------------------------------
--- Auto-Delete
+-- Core Matching Function
 ---------------------------------------------------------------------------
 
---- Queue an item for auto-deletion if it matches delete rules.
+--- Determine whether an item should be removed and how.
+--- @param itemLink string — WoW item link
+--- @param bag number|nil — bag index (for soulbound check; nil = skip)
+--- @param slot number|nil — slot index
+--- @return string|nil — "delete", "sell", or nil (keep)
+function FarmGenieShouldRemoveItem(itemLink, bag, slot)
+   if not itemLink then return nil end
+   if not FarmGenieDB or not FarmGenieDB.bagCleanup then return nil end
+
+   local bc = FarmGenieDB.bagCleanup
+
+   -- Global exclusions (checked before condition-based rules)
+   local itemName, _, itemQuality, _, _, itemType = GetItemInfo(itemLink)
+   if not itemName then return nil end
+   if bc.exclusions then
+      if bc.exclusions.quest and itemType == "Quest" then return nil end
+      if bc.exclusions.soulbound and bag and slot then
+         if FarmGenieIsSoulbound(bag, slot) then return nil end
+      end
+   end
+
+   local info = GatherItemInfo(itemLink, bag, slot)
+   if not info then return nil end
+
+   if not bc.rules then return nil end
+
+   -- Keep rules: any match → protect
+   for _, rule in ipairs(bc.rules) do
+      if rule.action == "keep" and MatchesRule(rule, info) then
+         return nil
+      end
+   end
+
+   -- Remove rules: first match → return action
+   for _, rule in ipairs(bc.rules) do
+      if (rule.action == "delete" or rule.action == "sell" or rule.action == "bank") and MatchesRule(rule, info) then
+         return rule.action
+      end
+   end
+
+   return nil
+end
+
+---------------------------------------------------------------------------
+-- Auto-Delete (on loot)
+---------------------------------------------------------------------------
+
+--- Queue an item for auto-deletion if it matches a "delete" remove rule.
 --- Called from FarmGenie.lua after ProcessLoot().
 function FarmGenieProcessAutoDelete(itemLink)
-   if not FarmGenieDB then return end
-   if not FarmGenieDB.deleteRules then return end
-   if not FarmGenieDB.deleteRules.enabled then return end
+   if not FarmGenieDB or not FarmGenieDB.bagCleanup then return end
+   if not FarmGenieDB.bagCleanup.autoDelete then return end
 
-   if FarmGenieMatchesRules(FarmGenieDB.deleteRules.rules, itemLink) then
+   -- On loot we don't have bag/slot yet; soulbound checked at deletion time
+   local action = FarmGenieShouldRemoveItem(itemLink, nil, nil)
+   if action == "delete" then
       local itemID = tonumber(itemLink:match("item:(%d+)"))
       if itemID then
          table.insert(deleteQueue, { itemID = itemID, link = itemLink })
@@ -84,19 +225,22 @@ end
 --- Find an item in bags by itemID and delete it.
 --- Returns true if the item was found and deleted.
 local function DeleteItemFromBags(itemID)
+   local bc = FarmGenieDB and FarmGenieDB.bagCleanup
    for bag = 0, 4 do
       for slot = 1, GetContainerNumSlots(bag) do
          local link = GetContainerItemLink(bag, slot)
          if link then
             local slotItemID = tonumber(link:match("item:(%d+)"))
             if slotItemID == itemID then
-               -- Check that the item isn't locked (e.g., during trade)
                local _, count, locked = GetContainerItemInfo(bag, slot)
-               if not locked then
-                  PickupContainerItem(bag, slot)
-                  DeleteCursorItem()
-                  return true
+               if locked then return false end
+               -- Soulbound safety check at deletion time
+               if bc and bc.exclusions and bc.exclusions.soulbound then
+                  if FarmGenieIsSoulbound(bag, slot) then return false end
                end
+               PickupContainerItem(bag, slot)
+               DeleteCursorItem()
+               return true
             end
          end
       end
@@ -112,7 +256,6 @@ local function ProcessDeleteQueue(self, elapsed)
    if deleteElapsed < DELETE_QUEUE_INTERVAL then return end
    deleteElapsed = 0
 
-   -- Process one item per tick
    local entry = table.remove(deleteQueue, 1)
    if entry then
       if DeleteItemFromBags(entry.itemID) then
@@ -122,21 +265,21 @@ local function ProcessDeleteQueue(self, elapsed)
 end
 
 ---------------------------------------------------------------------------
--- Auto-Vendor
+-- Auto-Vendor (at merchant)
 ---------------------------------------------------------------------------
 
---- Scan all bags for items matching vendor rules.
+--- Scan all bags for items matching "sell" remove rules.
 --- Returns array of { bag, slot, link, vendorPrice, quantity, name, quality }
 local function ScanBagsForVendorItems()
    local items = {}
-   if not FarmGenieDB or not FarmGenieDB.vendorRules then return items end
-   if not FarmGenieDB.vendorRules.rules or #FarmGenieDB.vendorRules.rules == 0 then return items end
+   if not FarmGenieDB or not FarmGenieDB.bagCleanup then return items end
 
    for bag = 0, 4 do
       for slot = 1, GetContainerNumSlots(bag) do
          local link = GetContainerItemLink(bag, slot)
          if link then
-            if FarmGenieMatchesRules(FarmGenieDB.vendorRules.rules, link) then
+            local action = FarmGenieShouldRemoveItem(link, bag, slot)
+            if action == "sell" then
                local itemName, _, itemQuality = GetItemInfo(link)
                local _, count = GetContainerItemInfo(bag, slot)
                local vendorPrice = select(11, GetItemInfo(link)) or 0
@@ -161,7 +304,6 @@ end
 local function ProcessSellQueue(self, elapsed)
    if not isSelling then return end
    if not merchantOpen then
-      -- Merchant closed, abort
       isSelling = false
       sellQueue = {}
       sellIndex = 0
@@ -174,7 +316,6 @@ local function ProcessSellQueue(self, elapsed)
 
    sellIndex = sellIndex + 1
    if sellIndex > #sellQueue then
-      -- Done selling
       isSelling = false
       if totalSold > 0 then
          FarmGeniePrint("Sold " .. totalSold .. " items for " ..
@@ -189,7 +330,6 @@ local function ProcessSellQueue(self, elapsed)
 
    local item = sellQueue[sellIndex]
    if item then
-      -- Verify item is still in that bag slot
       local link = GetContainerItemLink(item.bag, item.slot)
       if link then
          UseContainerItem(item.bag, item.slot)
@@ -215,47 +355,55 @@ function FarmGenieExecuteVendorSell(items)
    isSelling = true
 
    -- Close confirmation window if open
-   if vendorConfirmFrame then
-      AceGUI:Release(vendorConfirmFrame)
-      vendorConfirmFrame = nil
+   if confirmFrame then
+      AceGUI:Release(confirmFrame)
+      confirmFrame = nil
    end
 end
 
 ---------------------------------------------------------------------------
--- Vendor Confirmation Window
+-- Confirmation Popup (shared by vendor and clean bags)
 ---------------------------------------------------------------------------
 
---- Show a confirmation popup listing items to be sold.
-function FarmGenieShowVendorConfirm(items)
-   -- Close existing window if any
-   if vendorConfirmFrame then
-      AceGUI:Release(vendorConfirmFrame)
-      vendorConfirmFrame = nil
+--- Close the confirmation popup if open.
+local function CloseConfirmFrame()
+   if confirmFrame then
+      AceGUI:Release(confirmFrame)
+      confirmFrame = nil
    end
+end
 
+--- Show a confirmation popup listing items.
+--- @param title string — window title
+--- @param headerText string — description above the list
+--- @param items table — array of { link, quantity, displayPrice }
+--- @param totalValue number — total copper value
+--- @param confirmLabel string — text for the confirm button
+--- @param onConfirm function — called when confirm is clicked
+local function ShowConfirmPopup(title, headerText, items, totalValue, confirmLabel, onConfirm)
+   CloseConfirmFrame()
    if not items or #items == 0 then return end
 
    local frame = AceGUI:Create("Window")
-   frame:SetTitle("FarmGenie \226\128\148 Auto Vendor")
+   frame:SetTitle(title)
    frame:SetWidth(350)
    frame:SetHeight(320)
    frame:SetLayout("List")
    frame.frame:SetFrameStrata("DIALOG")
 
-   vendorConfirmFrame = frame
+   confirmFrame = frame
 
-   -- Escape key closes
-   FarmGenieRegisterESC("FarmGenieVendorConfirmFrame", frame.frame)
+   FarmGenieRegisterESC("FarmGenieConfirmFrame", frame.frame)
 
    frame:SetCallback("OnClose", function(widget)
-      FarmGenieUnregisterESC("FarmGenieVendorConfirmFrame")
+      FarmGenieUnregisterESC("FarmGenieConfirmFrame")
       AceGUI:Release(widget)
-      vendorConfirmFrame = nil
+      confirmFrame = nil
    end)
 
    -- Header
    local header = AceGUI:Create("Label")
-   header:SetText("  The following items will be sold:")
+   header:SetText("  " .. headerText)
    header:SetFullWidth(true)
    header:SetFont("Fonts\\FRIZQT__.TTF", 11)
    frame:AddChild(header)
@@ -267,10 +415,9 @@ function FarmGenieShowVendorConfirm(items)
    scroll:SetHeight(180)
    frame:AddChild(scroll)
 
-   local totalValue = 0
    for _, item in ipairs(items) do
       local label = AceGUI:Create("InteractiveLabel")
-      local priceText = FarmGenieFormatMoneyColored(item.vendorPrice)
+      local priceText = FarmGenieFormatMoneyColored(item.displayPrice)
       local qtyText = item.quantity > 1 and (" x" .. item.quantity) or ""
       label:SetText("  " .. item.link .. qtyText .. "  " .. priceText)
       label:SetFullWidth(true)
@@ -284,7 +431,6 @@ function FarmGenieShowVendorConfirm(items)
          GameTooltip:Hide()
       end)
       scroll:AddChild(label)
-      totalValue = totalValue + item.vendorPrice
    end
 
    -- Total
@@ -301,36 +447,61 @@ function FarmGenieShowVendorConfirm(items)
    btnGroup:SetFullWidth(true)
    frame:AddChild(btnGroup)
 
-   local sellBtn = AceGUI:Create("Button")
-   sellBtn:SetText("Sell All")
-   sellBtn:SetWidth(140)
-   sellBtn:SetCallback("OnClick", function()
-      FarmGenieExecuteVendorSell(items)
+   local confirmBtn = AceGUI:Create("Button")
+   confirmBtn:SetText(confirmLabel)
+   confirmBtn:SetWidth(140)
+   confirmBtn:SetCallback("OnClick", function()
+      onConfirm()
    end)
-   btnGroup:AddChild(sellBtn)
+   btnGroup:AddChild(confirmBtn)
 
    local cancelBtn = AceGUI:Create("Button")
    cancelBtn:SetText("Cancel")
    cancelBtn:SetWidth(140)
    cancelBtn:SetCallback("OnClick", function()
-      if vendorConfirmFrame then
-         AceGUI:Release(vendorConfirmFrame)
-         vendorConfirmFrame = nil
-      end
+      CloseConfirmFrame()
    end)
    btnGroup:AddChild(cancelBtn)
 end
 
+---------------------------------------------------------------------------
+-- Vendor Confirmation
+---------------------------------------------------------------------------
+
+function FarmGenieShowVendorConfirm(items)
+   if not items or #items == 0 then return end
+
+   -- Build display items with vendorPrice as displayPrice
+   local displayItems = {}
+   local totalValue = 0
+   for _, item in ipairs(items) do
+      table.insert(displayItems, {
+         link = item.link,
+         quantity = item.quantity,
+         displayPrice = item.vendorPrice,
+      })
+      totalValue = totalValue + item.vendorPrice
+   end
+
+   ShowConfirmPopup(
+      "FarmGenie \226\128\148 Auto Vendor",
+      "The following items will be sold:",
+      displayItems,
+      totalValue,
+      "Sell All",
+      function() FarmGenieExecuteVendorSell(items) end
+   )
+end
+
 --- Process auto-vendor when merchant opens.
 function FarmGenieProcessAutoVendor()
-   if not FarmGenieDB then return end
-   if not FarmGenieDB.vendorRules then return end
-   if not FarmGenieDB.vendorRules.enabled then return end
+   if not FarmGenieDB or not FarmGenieDB.bagCleanup then return end
+   if not FarmGenieDB.bagCleanup.autoVendor then return end
 
    local items = ScanBagsForVendorItems()
    if #items == 0 then return end
 
-   if FarmGenieDB.vendorRules.showConfirm then
+   if FarmGenieDB.bagCleanup.showVendorConfirm then
       FarmGenieShowVendorConfirm(items)
    else
       FarmGenieExecuteVendorSell(items)
@@ -338,35 +509,371 @@ function FarmGenieProcessAutoVendor()
 end
 
 ---------------------------------------------------------------------------
--- Event Handling & Initialization
+-- Clean Bags (manual delete with confirmation)
 ---------------------------------------------------------------------------
 
-function FarmGenieInitFilter()
-   -- Ensure DB defaults
-   if not FarmGenieDB then FarmGenieDB = {} end
+--- Scan bags for items matching "delete" remove rules.
+--- Returns array of { bag, slot, link, ahPrice, vendorPrice, quantity, name, quality, itemID }
+local function ScanBagsForDeleteItems()
+   local items = {}
+   if not FarmGenieDB or not FarmGenieDB.bagCleanup then return items end
 
-   if FarmGenieDB.deleteRules == nil then
-      FarmGenieDB.deleteRules = { enabled = false, rules = {} }
-   end
-   if FarmGenieDB.deleteRules.rules == nil then
-      FarmGenieDB.deleteRules.rules = {}
+   for bag = 0, 4 do
+      for slot = 1, GetContainerNumSlots(bag) do
+         local link = GetContainerItemLink(bag, slot)
+         if link then
+            local action = FarmGenieShouldRemoveItem(link, bag, slot)
+            if action == "delete" then
+               local itemName, _, itemQuality = GetItemInfo(link)
+               local _, count = GetContainerItemInfo(bag, slot)
+               local ahPrice, vendorPrice = FarmGenieGetItemValue(link)
+               local displayPrice = ahPrice > 0 and ahPrice or (vendorPrice or 0)
+               local itemID = tonumber(link:match("item:(%d+)"))
+               table.insert(items, {
+                  bag = bag,
+                  slot = slot,
+                  link = link,
+                  displayPrice = displayPrice * (count or 1),
+                  quantity = count or 1,
+                  name = itemName or "Unknown",
+                  quality = itemQuality or 0,
+                  itemID = itemID,
+               })
+            end
+         end
+      end
    end
 
-   if FarmGenieDB.vendorRules == nil then
-      FarmGenieDB.vendorRules = { enabled = false, showConfirm = true, rules = {} }
+   return items
+end
+
+--- Execute the clean bags operation: queue items for deletion.
+local function ExecuteCleanBags(items)
+   if not items or #items == 0 then return end
+   for _, item in ipairs(items) do
+      if item.itemID then
+         table.insert(deleteQueue, { itemID = item.itemID, link = item.link })
+      end
    end
-   if FarmGenieDB.vendorRules.rules == nil then
-      FarmGenieDB.vendorRules.rules = {}
+   CloseConfirmFrame()
+end
+
+--- Scan bags and show a confirmation popup for items to delete.
+function FarmGenieCleanBags()
+   local items = ScanBagsForDeleteItems()
+   if #items == 0 then
+      FarmGeniePrint("No items to clean.")
+      return
    end
-   if FarmGenieDB.vendorRules.showConfirm == nil then
-      FarmGenieDB.vendorRules.showConfirm = true
+
+   local displayItems = {}
+   local totalValue = 0
+   for _, item in ipairs(items) do
+      table.insert(displayItems, {
+         link = item.link,
+         quantity = item.quantity,
+         displayPrice = item.displayPrice,
+      })
+      totalValue = totalValue + item.displayPrice
+   end
+
+   ShowConfirmPopup(
+      "FarmGenie \226\128\148 Clean Bags",
+      "The following items will be deleted:",
+      displayItems,
+      totalValue,
+      "Delete All",
+      function() ExecuteCleanBags(items) end
+   )
+end
+
+---------------------------------------------------------------------------
+-- Auto-Bank (at bank NPC)
+---------------------------------------------------------------------------
+
+--- Scan all bags for items matching "bank" remove rules.
+--- Returns array of { bag, slot, link, quantity, name, quality, displayPrice }
+local function ScanBagsForBankItems()
+   local items = {}
+   if not FarmGenieDB or not FarmGenieDB.bagCleanup then return items end
+
+   for bag = 0, 4 do
+      for slot = 1, GetContainerNumSlots(bag) do
+         local link = GetContainerItemLink(bag, slot)
+         if link then
+            local action = FarmGenieShouldRemoveItem(link, bag, slot)
+            if action == "bank" then
+               local itemName, _, itemQuality = GetItemInfo(link)
+               local _, count = GetContainerItemInfo(bag, slot)
+               local ahPrice, vendorPrice = FarmGenieGetItemValue(link)
+               local displayPrice = ahPrice > 0 and ahPrice or (vendorPrice or 0)
+               table.insert(items, {
+                  bag = bag,
+                  slot = slot,
+                  link = link,
+                  displayPrice = displayPrice * (count or 1),
+                  quantity = count or 1,
+                  name = itemName or "Unknown",
+                  quality = itemQuality or 0,
+               })
+            end
+         end
+      end
+   end
+
+   return items
+end
+
+--- Execute the bank deposit queue one item at a time.
+local function ProcessBankQueue(self, elapsed)
+   if not isBanking then return end
+   if not bankOpen then
+      isBanking = false
+      bankQueue = {}
+      bankIndex = 0
+      return
+   end
+
+   bankElapsed = bankElapsed + elapsed
+   if bankElapsed < BANK_INTERVAL then return end
+   bankElapsed = 0
+
+   bankIndex = bankIndex + 1
+   if bankIndex > #bankQueue then
+      isBanking = false
+      if totalBanked > 0 then
+         FarmGeniePrint("Deposited " .. totalBanked .. " items to bank.")
+      end
+      bankQueue = {}
+      bankIndex = 0
+      totalBanked = 0
+      return
+   end
+
+   local item = bankQueue[bankIndex]
+   if item then
+      local link = GetContainerItemLink(item.bag, item.slot)
+      if link then
+         UseContainerItem(item.bag, item.slot)
+         totalBanked = totalBanked + 1
+      end
    end
 end
 
--- Event frame for MERCHANT_SHOW / MERCHANT_CLOSED
+--- Start depositing items from the bank list.
+function FarmGenieExecuteBankDeposit(items)
+   if not bankOpen then
+      FarmGeniePrint("Bank window is not open.")
+      return
+   end
+   if not items or #items == 0 then return end
+
+   bankQueue = items
+   bankIndex = 0
+   bankElapsed = 0
+   totalBanked = 0
+   isBanking = true
+
+   -- Close confirmation window if open
+   if confirmFrame then
+      AceGUI:Release(confirmFrame)
+      confirmFrame = nil
+   end
+end
+
+--- Show bank confirmation popup.
+function FarmGenieShowBankConfirm(items)
+   if not items or #items == 0 then return end
+
+   local displayItems = {}
+   local totalValue = 0
+   for _, item in ipairs(items) do
+      table.insert(displayItems, {
+         link = item.link,
+         quantity = item.quantity,
+         displayPrice = item.displayPrice,
+      })
+      totalValue = totalValue + item.displayPrice
+   end
+
+   ShowConfirmPopup(
+      "FarmGenie \226\128\148 Auto Bank",
+      "The following items will be deposited:",
+      displayItems,
+      totalValue,
+      "Deposit All",
+      function() FarmGenieExecuteBankDeposit(items) end
+   )
+end
+
+--- Process auto-bank when bank opens.
+function FarmGenieProcessAutoBank()
+   if not FarmGenieDB or not FarmGenieDB.bagCleanup then return end
+   if not FarmGenieDB.bagCleanup.autoBank then return end
+
+   local items = ScanBagsForBankItems()
+   if #items == 0 then return end
+
+   if FarmGenieDB.bagCleanup.showBankConfirm then
+      FarmGenieShowBankConfirm(items)
+   else
+      FarmGenieExecuteBankDeposit(items)
+   end
+end
+
+---------------------------------------------------------------------------
+-- Migration & Initialization
+---------------------------------------------------------------------------
+
+--- Migrate v0.1 deleteRules/vendorRules → v0.2 keepRules/removeRules.
+local function MigrateV1Rules()
+   if not FarmGenieDB then return end
+   if not FarmGenieDB.deleteRules and not FarmGenieDB.vendorRules then return end
+   if FarmGenieDB.bagCleanup then return end
+
+   local bc = {
+      exclusions = { soulbound = true, quest = true },
+      keepRules = {},
+      removeRules = {},
+      autoDelete = false,
+      autoVendor = false,
+      showVendorConfirm = true,
+   }
+
+   if FarmGenieDB.deleteRules then
+      bc.autoDelete = FarmGenieDB.deleteRules.enabled or false
+      if FarmGenieDB.deleteRules.rules then
+         for _, rule in ipairs(FarmGenieDB.deleteRules.rules) do
+            table.insert(bc.removeRules, {
+               quality = rule.quality or 0,
+               maxPrice = rule.maxPrice,
+               action = "delete",
+            })
+         end
+      end
+      FarmGenieDB.deleteRules = nil
+   end
+
+   if FarmGenieDB.vendorRules then
+      bc.autoVendor = FarmGenieDB.vendorRules.enabled or false
+      bc.showVendorConfirm = FarmGenieDB.vendorRules.showConfirm
+      if bc.showVendorConfirm == nil then bc.showVendorConfirm = true end
+      if FarmGenieDB.vendorRules.rules then
+         for _, rule in ipairs(FarmGenieDB.vendorRules.rules) do
+            table.insert(bc.removeRules, {
+               quality = rule.quality or 0,
+               maxPrice = rule.maxPrice,
+               action = "sell",
+            })
+         end
+      end
+      FarmGenieDB.vendorRules = nil
+   end
+
+   FarmGenieDB.bagCleanup = bc
+   FarmGeniePrint("Migrated filter rules to new Bag Cleanup format.")
+end
+
+--- Migrate v0.2 keepRules/removeRules → v0.3 condition-based rules.
+local function MigrateToConditionRules()
+   if not FarmGenieDB or not FarmGenieDB.bagCleanup then return end
+   local bc = FarmGenieDB.bagCleanup
+
+   -- Already migrated or nothing to migrate
+   if bc.rules then return end
+   if not bc.keepRules and not bc.removeRules then return end
+
+   local newRules = {}
+
+   -- Convert keep rules
+   if bc.keepRules then
+      for _, old in ipairs(bc.keepRules) do
+         local rule = { action = "keep", conditions = {} }
+         if old.quality and old.quality ~= -1 then
+            table.insert(rule.conditions, { subject = "Quality", comparer = "equals", value = old.quality })
+         end
+         if old.itemType then
+            table.insert(rule.conditions, { subject = "Item Type", comparer = "equals", value = old.itemType })
+         end
+         if old.nameMatch and old.nameMatch ~= "" then
+            table.insert(rule.conditions, { subject = "Item Name", comparer = "contains", value = old.nameMatch })
+         end
+         if old.minPrice and old.minPrice > 0 then
+            table.insert(rule.conditions, { subject = "AH Price", comparer = "above", value = old.minPrice })
+         end
+         table.insert(newRules, rule)
+      end
+   end
+
+   -- Convert remove rules
+   if bc.removeRules then
+      for _, old in ipairs(bc.removeRules) do
+         local rule = { action = old.action or "delete", conditions = {} }
+         if old.quality and old.quality ~= -1 then
+            table.insert(rule.conditions, { subject = "Quality", comparer = "equals", value = old.quality })
+         end
+         if old.itemType then
+            table.insert(rule.conditions, { subject = "Item Type", comparer = "equals", value = old.itemType })
+         end
+         if old.nameMatch and old.nameMatch ~= "" then
+            table.insert(rule.conditions, { subject = "Item Name", comparer = "contains", value = old.nameMatch })
+         end
+         if old.maxPrice and old.maxPrice > 0 then
+            table.insert(rule.conditions, { subject = "AH Price", comparer = "below", value = old.maxPrice })
+         end
+         table.insert(newRules, rule)
+      end
+   end
+
+   bc.rules = newRules
+   bc.keepRules = nil
+   bc.removeRules = nil
+   FarmGeniePrint("Migrated rules to condition-based format.")
+end
+
+function FarmGenieInitFilter()
+   if not FarmGenieDB then FarmGenieDB = {} end
+
+   -- Migrate v0.1 → v0.2 (old deleteRules/vendorRules)
+   MigrateV1Rules()
+
+   -- Ensure bagCleanup structure exists
+   if not FarmGenieDB.bagCleanup then
+      FarmGenieDB.bagCleanup = {
+         exclusions = { soulbound = true, quest = true },
+         rules = {},
+         autoDelete = false,
+         autoVendor = false,
+         showVendorConfirm = true,
+         autoBank = true,
+         showBankConfirm = true,
+      }
+   end
+
+   -- Migrate v0.2 → v0.3 (keepRules/removeRules → condition-based rules)
+   MigrateToConditionRules()
+
+   local bc = FarmGenieDB.bagCleanup
+   if not bc.exclusions then bc.exclusions = { soulbound = true, quest = true } end
+   if bc.exclusions.soulbound == nil then bc.exclusions.soulbound = true end
+   if bc.exclusions.quest == nil then bc.exclusions.quest = true end
+   if not bc.rules then bc.rules = {} end
+   if bc.autoDelete == nil then bc.autoDelete = false end
+   if bc.autoVendor == nil then bc.autoVendor = false end
+   if bc.showVendorConfirm == nil then bc.showVendorConfirm = true end
+   if bc.autoBank == nil then bc.autoBank = true end
+   if bc.showBankConfirm == nil then bc.showBankConfirm = true end
+end
+
+---------------------------------------------------------------------------
+-- Event Handling
+---------------------------------------------------------------------------
+
 local filterEventFrame = CreateFrame("Frame")
 filterEventFrame:RegisterEvent("MERCHANT_SHOW")
 filterEventFrame:RegisterEvent("MERCHANT_CLOSED")
+filterEventFrame:RegisterEvent("BANKFRAME_OPENED")
+filterEventFrame:RegisterEvent("BANKFRAME_CLOSED")
 
 filterEventFrame:SetScript("OnEvent", function(self, event)
    if event == "MERCHANT_SHOW" then
@@ -376,10 +883,7 @@ filterEventFrame:SetScript("OnEvent", function(self, event)
    elseif event == "MERCHANT_CLOSED" then
       merchantOpen = false
       -- Close confirmation window if still open
-      if vendorConfirmFrame then
-         AceGUI:Release(vendorConfirmFrame)
-         vendorConfirmFrame = nil
-      end
+      CloseConfirmFrame()
       -- Abort any in-progress selling
       if isSelling then
          isSelling = false
@@ -392,11 +896,31 @@ filterEventFrame:SetScript("OnEvent", function(self, event)
          totalSold = 0
          totalSoldValue = 0
       end
+
+   elseif event == "BANKFRAME_OPENED" then
+      bankOpen = true
+      FarmGenieProcessAutoBank()
+
+   elseif event == "BANKFRAME_CLOSED" then
+      bankOpen = false
+      -- Close confirmation window if still open
+      CloseConfirmFrame()
+      -- Abort any in-progress banking
+      if isBanking then
+         isBanking = false
+         if totalBanked > 0 then
+            FarmGeniePrint("Deposited " .. totalBanked .. " items to bank.")
+         end
+         bankQueue = {}
+         bankIndex = 0
+         totalBanked = 0
+      end
    end
 end)
 
--- OnUpdate for delete queue and sell queue processing
+-- OnUpdate for delete queue, sell queue, and bank queue processing
 filterEventFrame:SetScript("OnUpdate", function(self, elapsed)
    ProcessDeleteQueue(self, elapsed)
    ProcessSellQueue(self, elapsed)
+   ProcessBankQueue(self, elapsed)
 end)

@@ -1,6 +1,6 @@
 # FarmGenie
 
-A farming session tracker for the **Ascension** private server (WoW 3.3.5). FarmGenie tracks items looted during farming sessions, displays their auction house value, and shows you how much gold you're earning per hour. It also auto-deletes junk items and auto-sells at vendors using configurable rules.
+A farming session tracker for the **Ascension** private server (WoW 3.3.5). FarmGenie tracks items looted during farming sessions, displays their auction house value, and shows you how much gold you're earning per hour. It also provides a powerful bag cleanup system that can auto-delete, auto-sell, and auto-bank items using a flexible condition-based rule builder.
 
 ## Features
 
@@ -9,8 +9,12 @@ A farming session tracker for the **Ascension** private server (WoW 3.3.5). Farm
 - **Auction House Prices** — Integrates with Auctionator for accurate AH pricing, falls back to vendor prices
 - **Item Counter Bar** — Vertical bar of draggable item slots to track specific item counts in your bags in real-time
 - **Loot Filters** — Filter by minimum item quality and minimum AH price to keep the log clean
-- **Auto Delete** — Automatically delete items as you loot them based on quality and AH price rules (e.g., delete all greys, delete greens worth less than 2g)
-- **Auto Vendor** — Automatically sell items when you open a merchant window, with an optional confirmation popup showing what will be sold
+- **Condition-Based Rule Builder** — Create rules with multiple conditions (item quality, type, name, AH price, vendor price, soulbound, quest item) to control what happens to your loot. Each rule has an action (Keep, Delete, Sell, or Bank) and conditions that must all match (AND logic). Keep rules always take priority.
+- **Auto Delete** — Automatically delete items matching Delete rules as you loot them
+- **Auto Vendor** — Automatically sell items matching Sell rules when you open a merchant, with an optional confirmation popup
+- **Auto Bank** — Automatically deposit items matching Bank rules when you open a bank, with an optional confirmation popup
+- **Clean Bags** — Manually scan and delete items matching Delete rules with a confirmation popup
+- **Global Exclusions** — Protect soulbound and quest items from all cleanup actions regardless of rules
 - **Session Management** — Start, pause, and resume sessions; auto-start option available
 - **Minimap Button** — Quick-access dropdown for Loot Log, Item Bar, Settings, and New Session
 - **Persistent Settings** — Window positions, tracked items, and preferences saved between sessions
@@ -31,11 +35,12 @@ A farming session tracker for the **Ascension** private server (WoW 3.3.5). Farm
 - `/fg new` — Start a new farming session
 - `/fg pause` — Pause logging
 - `/fg resume` — Resume logging
-- `/fg vendor` — Run auto-vendor scan (sells items matching vendor rules if at a merchant)
+- `/fg vendor` — Run auto-vendor scan (sells items matching Sell rules if at a merchant)
+- `/fg clean` — Clean bags now (delete items matching Delete rules)
+- `/fg bank` — Deposit items matching Bank rules (requires bank to be open)
 - `/fg help` — Show all available commands
 - **Item Counter Bar** — Drag items from your bags into slots to track their count. Right-click a slot to remove it. Items auto-rearrange when slots are removed.
-- **Auto Delete** — Configure rules in Settings > Auto Delete. Each rule targets a quality level with an optional AH price threshold. Items are deleted as they're looted.
-- **Auto Vendor** — Configure rules in Settings > Auto Vendor. When you open a merchant window, a confirmation popup lists items to sell. Click "Sell All" to confirm or "Cancel" to skip.
+- **Bag Cleanup Rules** — Configure rules in Settings > Bag Cleanup > Rules. Each rule has an action and one or more conditions. Use Keep rules to protect valuable items, Delete rules for junk, Sell rules for vendor trash, and Bank rules for items to store. Enable automation toggles in the Bag Cleanup panel to trigger rules automatically.
 
 ## Optional Dependencies
 

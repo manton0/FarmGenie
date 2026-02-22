@@ -1,5 +1,5 @@
 ## Interface: 30300
-## Version: 0.2.0
+## Version: 0.4.0
 ## Title: FarmGenie
 ## Notes: Track looted items and their AH value while farming. Auto-delete and auto-vendor with configurable rules.
 ## Author: Discord: the_mazer

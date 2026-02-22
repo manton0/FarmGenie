@@ -11,8 +11,8 @@ local treeGroup = nil
 ---------------------------------------------------------------------------
 local DrawGeneralPanel
 local DrawFiltersPanel
-local DrawAutoDeletePanel
-local DrawAutoVendorPanel
+local DrawBagCleanupPanel
+local DrawRulesPanel
 local DrawDebugPanel
 local DrawAboutPanel
 
@@ -43,34 +43,103 @@ function FarmGenieUnregisterESC(name)
    end
 end
 
+local function AddSpacer(parent)
+   local spacer = AceGUI:Create("Label")
+   spacer:SetText(" ")
+   spacer:SetFullWidth(true)
+   parent:AddChild(spacer)
+end
+
+---------------------------------------------------------------------------
+-- Shared constants for rule UI
+---------------------------------------------------------------------------
+local QUALITY_LIST = {
+   [-1] = "Any",
+   [0] = "\124cff9d9d9dPoor\124r",
+   [1] = "\124cffffffffCommon\124r",
+   [2] = "\124cff1eff00Uncommon\124r",
+   [3] = "\124cff0070ddRare\124r",
+   [4] = "\124cffa335eeEpic\124r",
+}
+local QUALITY_ORDER = { -1, 0, 1, 2, 3, 4 }
+
+local ITEM_TYPE_LIST = {
+   [""] = "Any",
+   ["Armor"] = "Armor",
+   ["Consumable"] = "Consumable",
+   ["Container"] = "Container",
+   ["Gem"] = "Gem",
+   ["Miscellaneous"] = "Miscellaneous",
+   ["Projectile"] = "Projectile",
+   ["Reagent"] = "Reagent",
+   ["Recipe"] = "Recipe",
+   ["Trade Goods"] = "Trade Goods",
+   ["Weapon"] = "Weapon",
+}
+local ITEM_TYPE_ORDER = {
+   "", "Armor", "Consumable", "Container", "Gem",
+   "Miscellaneous", "Projectile", "Reagent", "Recipe",
+   "Trade Goods", "Weapon",
+}
+
+local ACTION_LIST = {
+   ["keep"] = "\124cff00ff00Keep\124r",
+   ["delete"] = "\124cffff4444Delete\124r",
+   ["sell"] = "\124cffffcc00Sell to Vendor\124r",
+   ["bank"] = "\124cff69b4ffDeposit to Bank\124r",
+}
+local ACTION_ORDER = { "keep", "delete", "sell", "bank" }
+
 ---------------------------------------------------------------------------
 -- Tree structure
 ---------------------------------------------------------------------------
 local function GetTreeStructure()
    return {
-      { value = "general",    text = "General" },
-      { value = "filters",    text = "Filters" },
-      { value = "autodelete", text = "Auto Delete" },
-      { value = "autovendor", text = "Auto Vendor" },
-      { value = "debug",      text = "Debug" },
-      { value = "about",      text = "About" },
+      { value = "general",    text = "General",     icon = "Interface\\Icons\\INV_Misc_Gear_01" },
+      { value = "filters",    text = "Filters",     icon = "Interface\\Icons\\INV_Misc_Spyglass_02" },
+      { value = "bagcleanup", text = "Bag Cleanup", icon = "Interface\\Icons\\INV_Misc_Bag_10", children = {
+         { value = "rules", text = "Rules", icon = "Interface\\Icons\\INV_Misc_Note_01" },
+      }},
+      { value = "debug",      text = "Debug",       icon = "Interface\\Icons\\Trade_Engineering" },
+      { value = "about",      text = "About",       icon = "Interface\\Icons\\INV_Misc_Note_01" },
    }
 end
 
 ---------------------------------------------------------------------------
 -- Tree group callback
 ---------------------------------------------------------------------------
+local conditionPickerFrame = nil
+local overlayButtons = {}
+
+local function CleanupOverlayButtons()
+   for i = 1, #overlayButtons do
+      overlayButtons[i].frame:SetNormalTexture(nil)
+      overlayButtons[i].frame:Hide()
+      AceGUI:Release(overlayButtons[i])
+   end
+   overlayButtons = {}
+end
+
+local function CloseConditionPicker()
+   if conditionPickerFrame then
+      AceGUI:Release(conditionPickerFrame)
+      conditionPickerFrame = nil
+   end
+end
+
 local function OnGroupSelected(container, event, group)
+   CleanupOverlayButtons()
+   CloseConditionPicker()
    container:ReleaseChildren()
 
    if group == "general" then
       DrawGeneralPanel(container)
    elseif group == "filters" then
       DrawFiltersPanel(container)
-   elseif group == "autodelete" then
-      DrawAutoDeletePanel(container)
-   elseif group == "autovendor" then
-      DrawAutoVendorPanel(container)
+   elseif group == "bagcleanup" then
+      DrawBagCleanupPanel(container)
+   elseif group == "bagcleanup\001rules" then
+      DrawRulesPanel(container)
    elseif group == "debug" then
       DrawDebugPanel(container)
    elseif group == "about" then
@@ -106,11 +175,7 @@ DrawGeneralPanel = function(container)
    statusLabel:SetFont("Fonts\\FRIZQT__.TTF", 11)
    scroll:AddChild(statusLabel)
 
-   -- Spacer
-   local spacer = AceGUI:Create("Label")
-   spacer:SetText(" ")
-   spacer:SetFullWidth(true)
-   scroll:AddChild(spacer)
+   AddSpacer(scroll)
 
    -- Auto-start session
    local autoStart = AceGUI:Create("CheckBox")
@@ -186,11 +251,7 @@ DrawFiltersPanel = function(container)
    desc:SetFont("Fonts\\FRIZQT__.TTF", 11)
    scroll:AddChild(desc)
 
-   -- Spacer
-   local spacer = AceGUI:Create("Label")
-   spacer:SetText(" ")
-   spacer:SetFullWidth(true)
-   scroll:AddChild(spacer)
+   AddSpacer(scroll)
 
    -- Quality dropdown
    local qualityDropdown = AceGUI:Create("Dropdown")
@@ -212,11 +273,7 @@ DrawFiltersPanel = function(container)
    end)
    scroll:AddChild(qualityDropdown)
 
-   -- Spacer
-   local spacer2 = AceGUI:Create("Label")
-   spacer2:SetText(" ")
-   spacer2:SetFullWidth(true)
-   scroll:AddChild(spacer2)
+   AddSpacer(scroll)
 
    -- Minimum AH price
    local minPriceBox = AceGUI:Create("EditBox")
@@ -238,11 +295,7 @@ DrawFiltersPanel = function(container)
    priceDesc:SetFont("Fonts\\FRIZQT__.TTF", 10)
    scroll:AddChild(priceDesc)
 
-   -- Spacer
-   local spacer3 = AceGUI:Create("Label")
-   spacer3:SetText(" ")
-   spacer3:SetFullWidth(true)
-   scroll:AddChild(spacer3)
+   AddSpacer(scroll)
 
    -- Max loot entries
    local maxEntriesBox = AceGUI:Create("EditBox")
@@ -267,270 +320,647 @@ DrawFiltersPanel = function(container)
 end
 
 ---------------------------------------------------------------------------
--- Shared: Draw a rule list UI for auto-delete or auto-vendor
+-- Bag Cleanup – Options Panel (parent node)
 ---------------------------------------------------------------------------
-local QUALITY_LIST = {
+DrawBagCleanupPanel = function(container)
+   local scroll = AceGUI:Create("ScrollFrame")
+   scroll:SetLayout("List")
+   scroll:SetFullWidth(true)
+   scroll:SetFullHeight(true)
+   container:AddChild(scroll)
+
+   local bc = FarmGenieDB.bagCleanup
+
+   -- Header
+   local header = AceGUI:Create("Heading")
+   header:SetText("Bag Cleanup")
+   header:SetFullWidth(true)
+   scroll:AddChild(header)
+
+   local desc = AceGUI:Create("Label")
+   desc:SetText("  Automatically delete, sell, or bank items based on configurable rules.\n  Create rules with conditions in the Rules tab below.")
+   desc:SetFullWidth(true)
+   desc:SetFont("Fonts\\FRIZQT__.TTF", 11)
+   scroll:AddChild(desc)
+
+   AddSpacer(scroll)
+
+   -- Global Exclusions
+   local exclHeader = AceGUI:Create("Heading")
+   exclHeader:SetText("Global Exclusions")
+   exclHeader:SetFullWidth(true)
+   scroll:AddChild(exclHeader)
+
+   local exclDesc = AceGUI:Create("Label")
+   exclDesc:SetText("  These items are always protected, regardless of remove rules.")
+   exclDesc:SetFullWidth(true)
+   exclDesc:SetFont("Fonts\\FRIZQT__.TTF", 10)
+   scroll:AddChild(exclDesc)
+
+   local soulboundCB = AceGUI:Create("CheckBox")
+   soulboundCB:SetLabel("Exclude soulbound items")
+   soulboundCB:SetDescription("Never delete, sell, or bank items that are soulbound")
+   soulboundCB:SetFullWidth(true)
+   soulboundCB:SetValue(bc.exclusions.soulbound)
+   soulboundCB:SetCallback("OnValueChanged", function(widget, event, value)
+      bc.exclusions.soulbound = value
+   end)
+   scroll:AddChild(soulboundCB)
+
+   local questCB = AceGUI:Create("CheckBox")
+   questCB:SetLabel("Exclude quest items")
+   questCB:SetDescription("Never delete, sell, or bank items of type Quest")
+   questCB:SetFullWidth(true)
+   questCB:SetValue(bc.exclusions.quest)
+   questCB:SetCallback("OnValueChanged", function(widget, event, value)
+      bc.exclusions.quest = value
+   end)
+   scroll:AddChild(questCB)
+
+   AddSpacer(scroll)
+
+   -- Automation
+   local autoHeader = AceGUI:Create("Heading")
+   autoHeader:SetText("Automation")
+   autoHeader:SetFullWidth(true)
+   scroll:AddChild(autoHeader)
+
+   local autoDeleteCB = AceGUI:Create("CheckBox")
+   autoDeleteCB:SetLabel("Enable auto-delete on loot")
+   autoDeleteCB:SetDescription("Automatically delete items matching 'Delete' rules as you loot them")
+   autoDeleteCB:SetFullWidth(true)
+   autoDeleteCB:SetValue(bc.autoDelete)
+   autoDeleteCB:SetCallback("OnValueChanged", function(widget, event, value)
+      bc.autoDelete = value
+   end)
+   scroll:AddChild(autoDeleteCB)
+
+   local autoVendorCB = AceGUI:Create("CheckBox")
+   autoVendorCB:SetLabel("Enable auto-vendor at merchants")
+   autoVendorCB:SetDescription("Automatically sell items matching 'Sell' rules when opening a merchant")
+   autoVendorCB:SetFullWidth(true)
+   autoVendorCB:SetValue(bc.autoVendor)
+   autoVendorCB:SetCallback("OnValueChanged", function(widget, event, value)
+      bc.autoVendor = value
+   end)
+   scroll:AddChild(autoVendorCB)
+
+   local vendorConfirmCB = AceGUI:Create("CheckBox")
+   vendorConfirmCB:SetLabel("Show vendor confirmation")
+   vendorConfirmCB:SetDescription("Display a confirmation window before selling items at merchants")
+   vendorConfirmCB:SetFullWidth(true)
+   vendorConfirmCB:SetValue(bc.showVendorConfirm)
+   vendorConfirmCB:SetCallback("OnValueChanged", function(widget, event, value)
+      bc.showVendorConfirm = value
+   end)
+   scroll:AddChild(vendorConfirmCB)
+
+   local autoBankCB = AceGUI:Create("CheckBox")
+   autoBankCB:SetLabel("Enable auto-bank at bank NPCs")
+   autoBankCB:SetDescription("Automatically deposit items matching 'Bank' rules when opening a bank")
+   autoBankCB:SetFullWidth(true)
+   autoBankCB:SetValue(bc.autoBank)
+   autoBankCB:SetCallback("OnValueChanged", function(widget, event, value)
+      bc.autoBank = value
+   end)
+   scroll:AddChild(autoBankCB)
+
+   local bankConfirmCB = AceGUI:Create("CheckBox")
+   bankConfirmCB:SetLabel("Show bank confirmation")
+   bankConfirmCB:SetDescription("Display a confirmation window before depositing items to the bank")
+   bankConfirmCB:SetFullWidth(true)
+   bankConfirmCB:SetValue(bc.showBankConfirm)
+   bankConfirmCB:SetCallback("OnValueChanged", function(widget, event, value)
+      bc.showBankConfirm = value
+   end)
+   scroll:AddChild(bankConfirmCB)
+
+   AddSpacer(scroll)
+
+   -- Manual
+   local manualHeader = AceGUI:Create("Heading")
+   manualHeader:SetText("Manual")
+   manualHeader:SetFullWidth(true)
+   scroll:AddChild(manualHeader)
+
+   local cleanBtn = AceGUI:Create("Button")
+   cleanBtn:SetText("Clean Bags Now")
+   cleanBtn:SetFullWidth(true)
+   cleanBtn:SetCallback("OnClick", function()
+      if FarmGenieCleanBags then
+         FarmGenieCleanBags()
+      end
+   end)
+   scroll:AddChild(cleanBtn)
+
+   local cleanDesc = AceGUI:Create("Label")
+   cleanDesc:SetText("  Scans your bags and shows items matching 'Delete' rules for confirmation.\n  Also available via /fg clean")
+   cleanDesc:SetFullWidth(true)
+   cleanDesc:SetFont("Fonts\\FRIZQT__.TTF", 10)
+   scroll:AddChild(cleanDesc)
+
+   AddSpacer(scroll)
+
+   local bankBtn = AceGUI:Create("Button")
+   bankBtn:SetText("Bank Items Now")
+   bankBtn:SetFullWidth(true)
+   bankBtn:SetCallback("OnClick", function()
+      if FarmGenieProcessAutoBank then
+         FarmGenieProcessAutoBank()
+      end
+   end)
+   scroll:AddChild(bankBtn)
+
+   local bankDesc = AceGUI:Create("Label")
+   bankDesc:SetText("  Scans your bags and shows items matching 'Bank' rules for confirmation.\n  Requires the bank window to be open. Also available via /fg bank")
+   bankDesc:SetFullWidth(true)
+   bankDesc:SetFont("Fonts\\FRIZQT__.TTF", 10)
+   scroll:AddChild(bankDesc)
+end
+
+---------------------------------------------------------------------------
+-- Bag Cleanup – Rules Panel (condition builder)
+---------------------------------------------------------------------------
+
+local ACTION_COLORS = {
+   keep = "\124cff00ff00",
+   delete = "\124cffff4444",
+   sell = "\124cffffcc00",
+   bank = "\124cff69b4ff",
+}
+local ACTION_LABELS = {
+   keep = "Keep",
+   delete = "Delete",
+   sell = "Sell to Vendor",
+   bank = "Deposit to Bank",
+}
+
+-- Quality list without "Any" (for condition picker — "any" is expressed by
+-- not adding a Quality condition at all)
+local QUALITY_PICKER_LIST = {
    [0] = "\124cff9d9d9dPoor\124r",
    [1] = "\124cffffffffCommon\124r",
    [2] = "\124cff1eff00Uncommon\124r",
    [3] = "\124cff0070ddRare\124r",
    [4] = "\124cffa335eeEpic\124r",
 }
-local QUALITY_ORDER = { 0, 1, 2, 3, 4 }
+local QUALITY_PICKER_ORDER = { 0, 1, 2, 3, 4 }
 
---- Draw a single rule row and return it as a group widget.
---- onDelete: function(index) called when remove button clicked
---- onUpdate: function(index, rule) called when rule values change
-local function DrawRuleRow(parent, index, rule, onDelete, onUpdate)
-   local row = AceGUI:Create("SimpleGroup")
-   row:SetLayout("Flow")
-   row:SetFullWidth(true)
-   parent:AddChild(row)
+-- Item type list without "Any" (for condition picker)
+local ITEM_TYPE_PICKER_LIST = {
+   ["Armor"] = "Armor",
+   ["Consumable"] = "Consumable",
+   ["Container"] = "Container",
+   ["Gem"] = "Gem",
+   ["Miscellaneous"] = "Miscellaneous",
+   ["Projectile"] = "Projectile",
+   ["Reagent"] = "Reagent",
+   ["Recipe"] = "Recipe",
+   ["Trade Goods"] = "Trade Goods",
+   ["Weapon"] = "Weapon",
+}
+local ITEM_TYPE_PICKER_ORDER = {
+   "Armor", "Consumable", "Container", "Gem",
+   "Miscellaneous", "Projectile", "Reagent", "Recipe",
+   "Trade Goods", "Weapon",
+}
 
-   -- Quality dropdown
-   local qualDrop = AceGUI:Create("Dropdown")
-   qualDrop:SetLabel("Quality")
-   qualDrop:SetList(QUALITY_LIST, QUALITY_ORDER)
-   qualDrop:SetValue(rule.quality or 0)
-   qualDrop:SetWidth(130)
-   qualDrop:SetCallback("OnValueChanged", function(widget, event, value)
-      rule.quality = value
-      if onUpdate then onUpdate(index, rule) end
-   end)
-   row:AddChild(qualDrop)
+local TEXTURE_CLOSE = "Interface\\AddOns\\FarmGenie\\Images\\close"
+local TEXTURE_UP    = "Interface\\AddOns\\FarmGenie\\Images\\up"
+local TEXTURE_DOWN  = "Interface\\AddOns\\FarmGenie\\Images\\down"
 
-   -- Price condition checkbox
-   local hasPriceCond = (rule.maxPrice and rule.maxPrice > 0) and true or false
-   local priceCB = AceGUI:Create("CheckBox")
-   priceCB:SetLabel("If AH price below")
-   priceCB:SetValue(hasPriceCond)
-   priceCB:SetWidth(145)
-   row:AddChild(priceCB)
+--- Create an overlay button parented to an InlineGroup frame (not added as child).
+--- Uses a texture icon instead of text for a cleaner look.
+local function CreateOverlayButton(parent, xOff, yOff, texture, onClick)
+   local btn = AceGUI:Create("Button")
+   btn:SetText("")
+   btn:SetWidth(20)
+   btn:SetHeight(20)
+   btn:SetCallback("OnClick", onClick)
 
-   -- Price editbox
-   local priceBox = AceGUI:Create("EditBox")
-   priceBox:SetLabel("Gold")
-   priceBox:SetWidth(70)
-   priceBox:SetText(hasPriceCond and tostring(math.floor((rule.maxPrice or 0) / 10000)) or "0")
-   priceBox:SetDisabled(not hasPriceCond)
-   priceBox:SetCallback("OnEnterPressed", function(widget, event, text)
-      local gold = tonumber(text) or 0
-      if gold < 0 then gold = 0 end
-      if hasPriceCond then
-         rule.maxPrice = gold * 10000
-      end
-      widget:SetText(tostring(gold))
-      if onUpdate then onUpdate(index, rule) end
-   end)
-   row:AddChild(priceBox)
+   btn.frame:ClearAllPoints()
+   btn.frame:SetParent(parent.frame)
+   btn.frame:SetPoint("TOPRIGHT", parent.frame, "TOPRIGHT", xOff, yOff)
+   btn.frame:SetNormalTexture(texture)
+   btn.frame:Show()
 
-   -- Wire up the checkbox to enable/disable price box
-   priceCB:SetCallback("OnValueChanged", function(widget, event, value)
-      hasPriceCond = value
-      priceBox:SetDisabled(not value)
-      if value then
-         local gold = tonumber(priceBox:GetText()) or 0
-         rule.maxPrice = gold * 10000
-      else
-         rule.maxPrice = nil
-      end
-      if onUpdate then onUpdate(index, rule) end
-   end)
-
-   -- Remove button
-   local removeBtn = AceGUI:Create("Button")
-   removeBtn:SetText("X")
-   removeBtn:SetWidth(40)
-   removeBtn:SetCallback("OnClick", function()
-      if onDelete then onDelete(index) end
-   end)
-   row:AddChild(removeBtn)
+   table.insert(overlayButtons, btn)
+   return btn
 end
 
---- Draw the full rule list for a ruleset (delete or vendor).
---- ruleset: reference to FarmGenieDB.deleteRules or FarmGenieDB.vendorRules
---- redrawPanel: function() to rebuild the panel after changes
-local function DrawRuleList(scroll, ruleset, redrawPanel)
-   if not ruleset.rules or #ruleset.rules == 0 then
+--- Format a condition value for display.
+local function FormatConditionValue(cond)
+   local subject = cond.subject
+   local value = cond.value
+
+   if subject == "Quality" then
+      local names = { [0] = "Poor", [1] = "Common", [2] = "Uncommon", [3] = "Rare", [4] = "Epic" }
+      local colors = { [0] = "9d9d9d", [1] = "ffffff", [2] = "1eff00", [3] = "0070dd", [4] = "a335ee" }
+      local name = names[value] or tostring(value)
+      local color = colors[value] or "ffffff"
+      return "\124cff" .. color .. name .. "\124r"
+
+   elseif subject == "AH Price" or subject == "Vendor Price" then
+      return FarmGenieFormatMoneyColored(value)
+
+   elseif subject == "Item Name" then
+      return '"' .. tostring(value) .. '"'
+
+   elseif subject == "Item Type" then
+      return tostring(value)
+   end
+
+   return tostring(value or "")
+end
+
+--- Draw a single condition card inside a rule card.
+local function DrawConditionCard(parent, rule, condIndex, cond, redraw)
+   local condCard = AceGUI:Create("InlineGroup")
+   condCard:SetTitle(condIndex .. ". Condition")
+   condCard:SetFullWidth(true)
+   parent:AddChild(condCard)
+
+   -- Subject
+   local subjectLabel = AceGUI:Create("Label")
+   subjectLabel:SetFullWidth(true)
+   subjectLabel:SetText("\124cFF00FF00Subject:\124r " .. (cond.subject or ""))
+   condCard:AddChild(subjectLabel)
+
+   -- Comparer
+   local comparerLabel = AceGUI:Create("Label")
+   comparerLabel:SetFullWidth(true)
+   comparerLabel:SetText("\124cFF00FF00Comparer:\124r " .. (cond.comparer or ""))
+   condCard:AddChild(comparerLabel)
+
+   -- Value (only for conditions that have one)
+   if cond.value ~= nil then
+      local valueLabel = AceGUI:Create("Label")
+      valueLabel:SetFullWidth(true)
+      valueLabel:SetText("\124cFF00FF00Value:\124r " .. FormatConditionValue(cond))
+      condCard:AddChild(valueLabel)
+   end
+
+   -- Delete condition overlay button
+   CreateOverlayButton(condCard, -10, -25, TEXTURE_CLOSE, function()
+      table.remove(rule.conditions, condIndex)
+      redraw()
+   end)
+end
+
+--- Show the condition picker window for adding a new condition to a rule.
+local function ShowConditionPicker(ruleIndex, redraw)
+   CloseConditionPicker()
+
+   local bc = FarmGenieDB.bagCleanup
+   local newCond = {}
+
+   conditionPickerFrame = AceGUI:Create("Window")
+   conditionPickerFrame:SetTitle("Add Condition")
+   conditionPickerFrame:SetWidth(300)
+   conditionPickerFrame:SetHeight(400)
+   conditionPickerFrame:SetLayout("List")
+   conditionPickerFrame:EnableResize(false)
+   conditionPickerFrame.frame:SetFrameStrata("DIALOG")
+
+   if mainFrame then
+      conditionPickerFrame:SetPoint("TOPLEFT", mainFrame.frame, "TOPRIGHT", 4, 0)
+   end
+
+   FarmGenieRegisterESC("FarmGenieConditionPicker", conditionPickerFrame.frame)
+
+   conditionPickerFrame:SetCallback("OnClose", function(widget)
+      FarmGenieUnregisterESC("FarmGenieConditionPicker")
+      AceGUI:Release(widget)
+      conditionPickerFrame = nil
+   end)
+
+   -- Info
+   local infoLabel = AceGUI:Create("Label")
+   infoLabel:SetFullWidth(true)
+   infoLabel:SetText("  Add condition to Rule #" .. ruleIndex)
+   infoLabel:SetFont("Fonts\\FRIZQT__.TTF", 11)
+   conditionPickerFrame:AddChild(infoLabel)
+
+   AddSpacer(conditionPickerFrame)
+
+   -- Tracking state
+   local subjectPicked = false
+   local comparerPicked = false
+   local valuePicked = false
+   local noValueNeeded = false
+
+   -- Build subject list from condition tree
+   local subjectOrder = {}
+   for subject in pairs(FarmGenieConditionTree) do
+      table.insert(subjectOrder, subject)
+   end
+   table.sort(subjectOrder)
+   local subjectList = {}
+   for i, s in ipairs(subjectOrder) do subjectList[i] = s end
+
+   -- Create widgets (some hidden initially)
+   local subjectDrop = AceGUI:Create("Dropdown")
+   subjectDrop:SetLabel("Subject")
+   subjectDrop:SetList(subjectList)
+   subjectDrop:SetFullWidth(true)
+
+   local comparerDrop = AceGUI:Create("Dropdown")
+   comparerDrop:SetLabel("Comparer")
+   comparerDrop:SetFullWidth(true)
+   comparerDrop:SetList({})
+
+   local valueDrop = AceGUI:Create("Dropdown")
+   valueDrop:SetLabel("Value")
+   valueDrop:SetFullWidth(true)
+
+   local valueEdit = AceGUI:Create("EditBox")
+   valueEdit:SetLabel("Value")
+   valueEdit:SetFullWidth(true)
+
+   -- Save button (disabled until all required fields are set)
+   local saveBtn = AceGUI:Create("Button")
+   saveBtn:SetText("Save")
+   saveBtn:SetWidth(120)
+   saveBtn:SetDisabled(true)
+
+   local function UpdateSaveState()
+      saveBtn:SetDisabled(not (subjectPicked and comparerPicked and (valuePicked or noValueNeeded)))
+   end
+
+   -- Subject change handler
+   subjectDrop:SetCallback("OnValueChanged", function(widget, event, key)
+      local subject = subjectOrder[key]
+      newCond.subject = subject
+      subjectPicked = true
+      comparerPicked = false
+      valuePicked = false
+      noValueNeeded = false
+
+      -- Update comparer list
+      local comparers = FarmGenieConditionTree[subject]
+      if comparers then
+         local cList = {}
+         for i, c in ipairs(comparers) do cList[i] = c end
+         comparerDrop:SetList(cList)
+         comparerDrop:SetValue(1)
+         newCond.comparer = comparers[1]
+         comparerPicked = true
+      end
+
+      -- Update value widget visibility
+      valueDrop.frame:Hide()
+      valueEdit.frame:Hide()
+
+      if subject == "Quality" then
+         valueDrop.frame:Show()
+         valueDrop:SetLabel("Quality")
+         valueDrop:SetList(QUALITY_PICKER_LIST, QUALITY_PICKER_ORDER)
+         valueDrop:SetValue(0)
+         newCond.value = 0
+         valuePicked = true
+      elseif subject == "Item Type" then
+         valueDrop.frame:Show()
+         valueDrop:SetLabel("Item Type")
+         valueDrop:SetList(ITEM_TYPE_PICKER_LIST, ITEM_TYPE_PICKER_ORDER)
+         valuePicked = false
+      elseif subject == "Item Name" then
+         valueEdit.frame:Show()
+         valueEdit:SetLabel("Name text")
+         valueEdit:SetText("")
+         valuePicked = false
+      elseif subject == "AH Price" or subject == "Vendor Price" then
+         valueEdit.frame:Show()
+         valueEdit:SetLabel("Gold amount")
+         valueEdit:SetText("")
+         valuePicked = false
+      elseif subject == "Soulbound" or subject == "Quest Item" then
+         noValueNeeded = true
+         valuePicked = true
+      end
+
+      UpdateSaveState()
+   end)
+
+   -- Comparer change handler
+   comparerDrop:SetCallback("OnValueChanged", function(widget, event, key)
+      local comparers = FarmGenieConditionTree[newCond.subject]
+      if comparers then
+         newCond.comparer = comparers[key]
+      end
+      comparerPicked = true
+      UpdateSaveState()
+   end)
+
+   -- Value dropdown handler (Quality, Item Type)
+   valueDrop:SetCallback("OnValueChanged", function(widget, event, key)
+      if newCond.subject == "Quality" then
+         newCond.value = key
+      elseif newCond.subject == "Item Type" then
+         newCond.value = key
+      end
+      valuePicked = true
+      UpdateSaveState()
+   end)
+
+   -- Value editbox handler (Item Name, prices)
+   valueEdit:SetCallback("OnEnterPressed", function(widget, event, text)
+      if newCond.subject == "Item Name" then
+         newCond.value = text
+         valuePicked = (text ~= "")
+      elseif newCond.subject == "AH Price" or newCond.subject == "Vendor Price" then
+         local gold = tonumber(text) or 0
+         newCond.value = gold * 10000
+         valuePicked = (gold > 0)
+      end
+      UpdateSaveState()
+   end)
+
+   -- Also update on text change for live validation
+   valueEdit:SetCallback("OnTextChanged", function(widget, event, text)
+      if newCond.subject == "Item Name" then
+         newCond.value = text
+         valuePicked = (text ~= "")
+      elseif newCond.subject == "AH Price" or newCond.subject == "Vendor Price" then
+         local gold = tonumber(text) or 0
+         newCond.value = gold * 10000
+         valuePicked = (gold > 0)
+      end
+      UpdateSaveState()
+   end)
+
+   -- Save button handler
+   saveBtn:SetCallback("OnClick", function()
+      if noValueNeeded then
+         newCond.value = nil
+      end
+
+      if bc.rules[ruleIndex] then
+         if not bc.rules[ruleIndex].conditions then
+            bc.rules[ruleIndex].conditions = {}
+         end
+         table.insert(bc.rules[ruleIndex].conditions, {
+            subject = newCond.subject,
+            comparer = newCond.comparer,
+            value = newCond.value,
+         })
+      end
+
+      CloseConditionPicker()
+      redraw()
+   end)
+
+   local cancelBtn = AceGUI:Create("Button")
+   cancelBtn:SetText("Cancel")
+   cancelBtn:SetWidth(120)
+   cancelBtn:SetCallback("OnClick", function()
+      CloseConditionPicker()
+   end)
+
+   -- Add widgets to picker window
+   conditionPickerFrame:AddChild(subjectDrop)
+   conditionPickerFrame:AddChild(comparerDrop)
+   conditionPickerFrame:AddChild(valueDrop)
+   conditionPickerFrame:AddChild(valueEdit)
+
+   -- Initially hide value widgets until subject is selected
+   valueDrop.frame:Hide()
+   valueEdit.frame:Hide()
+
+   AddSpacer(conditionPickerFrame)
+
+   local btnGroup = AceGUI:Create("SimpleGroup")
+   btnGroup:SetFullWidth(true)
+   btnGroup:SetLayout("Flow")
+   btnGroup:AddChild(saveBtn)
+   btnGroup:AddChild(cancelBtn)
+   conditionPickerFrame:AddChild(btnGroup)
+end
+
+--- Draw a single rule card with action dropdown, condition cards, and overlay buttons.
+local function DrawRuleCard(parent, rule, index, totalRules, redraw)
+   local bc = FarmGenieDB.bagCleanup
+   local actionColor = ACTION_COLORS[rule.action] or "\124cffffffff"
+   local actionLabel = ACTION_LABELS[rule.action] or "Unknown"
+
+   local card = AceGUI:Create("InlineGroup")
+   card:SetTitle(index .. ". " .. actionColor .. actionLabel .. "\124r")
+   card:SetFullWidth(true)
+   card:SetLayout("List")
+   parent:AddChild(card)
+
+   -- Action dropdown
+   local actionDrop = AceGUI:Create("Dropdown")
+   actionDrop:SetLabel("Action")
+   actionDrop:SetList(ACTION_LIST, ACTION_ORDER)
+   actionDrop:SetValue(rule.action)
+   actionDrop:SetWidth(150)
+   actionDrop:SetCallback("OnValueChanged", function(widget, event, value)
+      rule.action = value
+      redraw()
+   end)
+   card:AddChild(actionDrop)
+
+   -- Warning for rules with no conditions
+   if not rule.conditions or #rule.conditions == 0 then
+      local warnLabel = AceGUI:Create("Label")
+      warnLabel:SetFullWidth(true)
+      warnLabel:SetText("\124cffff4444Warning: This rule has no conditions and matches ALL items.\124r")
+      warnLabel:SetFont("Fonts\\FRIZQT__.TTF", 11)
+      card:AddChild(warnLabel)
+   else
+      -- Render condition cards
+      for ci, cond in ipairs(rule.conditions) do
+         DrawConditionCard(card, rule, ci, cond, redraw)
+      end
+   end
+
+   -- "Add Condition" button
+   local addCondBtn = AceGUI:Create("Button")
+   addCondBtn:SetText("Add Condition")
+   addCondBtn:SetWidth(150)
+   addCondBtn:SetCallback("OnClick", function()
+      ShowConditionPicker(index, redraw)
+   end)
+   card:AddChild(addCondBtn)
+
+   -- Overlay buttons: delete, move up, move down
+   CreateOverlayButton(card, -10, -25, TEXTURE_CLOSE, function()
+      table.remove(bc.rules, index)
+      redraw()
+   end)
+
+   if index > 1 then
+      CreateOverlayButton(card, -35, -25, TEXTURE_UP, function()
+         bc.rules[index], bc.rules[index - 1] = bc.rules[index - 1], bc.rules[index]
+         redraw()
+      end)
+   end
+
+   if index < totalRules then
+      local downXOff = index > 1 and -60 or -35
+      CreateOverlayButton(card, downXOff, -25, TEXTURE_DOWN, function()
+         bc.rules[index], bc.rules[index + 1] = bc.rules[index + 1], bc.rules[index]
+         redraw()
+      end)
+   end
+end
+
+DrawRulesPanel = function(container)
+   CleanupOverlayButtons()
+
+   local scroll = AceGUI:Create("ScrollFrame")
+   scroll:SetLayout("List")
+   scroll:SetFullWidth(true)
+   scroll:SetFullHeight(true)
+   container:AddChild(scroll)
+
+   local bc = FarmGenieDB.bagCleanup
+
+   local header = AceGUI:Create("Heading")
+   header:SetText("Cleanup Rules")
+   header:SetFullWidth(true)
+   scroll:AddChild(header)
+
+   local desc = AceGUI:Create("Label")
+   desc:SetText("  Rules are evaluated top to bottom. Keep rules protect items.\n  Delete/Sell/Bank rules act on items not protected by a Keep rule.\n  All conditions within a rule must match (AND logic).")
+   desc:SetFullWidth(true)
+   desc:SetFont("Fonts\\FRIZQT__.TTF", 11)
+   scroll:AddChild(desc)
+
+   AddSpacer(scroll)
+
+   local function redraw()
+      if treeGroup then treeGroup:SelectByPath("bagcleanup\001rules") end
+   end
+
+   if not bc.rules or #bc.rules == 0 then
       local emptyLabel = AceGUI:Create("Label")
-      emptyLabel:SetText("  No rules configured. Click 'Add Rule' to create one.")
+      emptyLabel:SetText("  No rules configured. Click 'New Rule' to create one.")
       emptyLabel:SetFullWidth(true)
       emptyLabel:SetFont("Fonts\\FRIZQT__.TTF", 11)
       scroll:AddChild(emptyLabel)
    else
-      for i, rule in ipairs(ruleset.rules) do
-         DrawRuleRow(scroll, i, rule,
-            function(index)  -- onDelete
-               table.remove(ruleset.rules, index)
-               redrawPanel()
-            end,
-            function(index, updatedRule)  -- onUpdate (saved in-place)
-            end
-         )
+      for i, rule in ipairs(bc.rules) do
+         DrawRuleCard(scroll, rule, i, #bc.rules, redraw)
       end
    end
 
-   -- Spacer
-   local spacer = AceGUI:Create("Label")
-   spacer:SetText(" ")
-   spacer:SetFullWidth(true)
-   scroll:AddChild(spacer)
+   AddSpacer(scroll)
 
-   -- Add Rule button
    local addBtn = AceGUI:Create("Button")
-   addBtn:SetText("Add Rule")
+   addBtn:SetText("New Rule")
    addBtn:SetWidth(120)
    addBtn:SetCallback("OnClick", function()
-      table.insert(ruleset.rules, { quality = 0 })
-      redrawPanel()
+      table.insert(bc.rules, { action = "keep", conditions = {} })
+      redraw()
    end)
    scroll:AddChild(addBtn)
 
-   -- Info label
    local infoLabel = AceGUI:Create("Label")
-   infoLabel:SetText("  Items with no AH price data are skipped when a price condition is set.\n  Quest items are never affected.")
+   infoLabel:SetText("  Tip: Items with no AH data pass 'AH Price above' (safe for Keep)\n  and fail 'AH Price below' (safe for Delete/Sell).")
    infoLabel:SetFullWidth(true)
    infoLabel:SetFont("Fonts\\FRIZQT__.TTF", 10)
    scroll:AddChild(infoLabel)
-end
-
----------------------------------------------------------------------------
--- Auto Delete Panel
----------------------------------------------------------------------------
-DrawAutoDeletePanel = function(container)
-   local scroll = AceGUI:Create("ScrollFrame")
-   scroll:SetLayout("List")
-   scroll:SetFullWidth(true)
-   scroll:SetFullHeight(true)
-   container:AddChild(scroll)
-
-   -- Header
-   local header = AceGUI:Create("Heading")
-   header:SetText("Auto Delete")
-   header:SetFullWidth(true)
-   scroll:AddChild(header)
-
-   local desc = AceGUI:Create("Label")
-   desc:SetText("  Automatically delete items from your bags as you loot them.")
-   desc:SetFullWidth(true)
-   desc:SetFont("Fonts\\FRIZQT__.TTF", 11)
-   scroll:AddChild(desc)
-
-   -- Spacer
-   local spacer = AceGUI:Create("Label")
-   spacer:SetText(" ")
-   spacer:SetFullWidth(true)
-   scroll:AddChild(spacer)
-
-   -- Ensure DB exists
-   if not FarmGenieDB.deleteRules then
-      FarmGenieDB.deleteRules = { enabled = false, rules = {} }
-   end
-
-   -- Enable checkbox
-   local enableCB = AceGUI:Create("CheckBox")
-   enableCB:SetLabel("Enable auto-delete")
-   enableCB:SetDescription("When enabled, items matching the rules below will be deleted as you loot them")
-   enableCB:SetFullWidth(true)
-   enableCB:SetValue(FarmGenieDB.deleteRules.enabled)
-   enableCB:SetCallback("OnValueChanged", function(widget, event, value)
-      FarmGenieDB.deleteRules.enabled = value
-   end)
-   scroll:AddChild(enableCB)
-
-   -- Spacer
-   local spacer2 = AceGUI:Create("Label")
-   spacer2:SetText(" ")
-   spacer2:SetFullWidth(true)
-   scroll:AddChild(spacer2)
-
-   -- Rules header
-   local rulesHeader = AceGUI:Create("Heading")
-   rulesHeader:SetText("Delete Rules")
-   rulesHeader:SetFullWidth(true)
-   scroll:AddChild(rulesHeader)
-
-   -- Draw rules with redraw callback
-   DrawRuleList(scroll, FarmGenieDB.deleteRules, function()
-      if treeGroup then
-         treeGroup:SelectByPath("autodelete")
-      end
-   end)
-end
-
----------------------------------------------------------------------------
--- Auto Vendor Panel
----------------------------------------------------------------------------
-DrawAutoVendorPanel = function(container)
-   local scroll = AceGUI:Create("ScrollFrame")
-   scroll:SetLayout("List")
-   scroll:SetFullWidth(true)
-   scroll:SetFullHeight(true)
-   container:AddChild(scroll)
-
-   -- Header
-   local header = AceGUI:Create("Heading")
-   header:SetText("Auto Vendor")
-   header:SetFullWidth(true)
-   scroll:AddChild(header)
-
-   local desc = AceGUI:Create("Label")
-   desc:SetText("  Automatically sell items when you open a merchant window.")
-   desc:SetFullWidth(true)
-   desc:SetFont("Fonts\\FRIZQT__.TTF", 11)
-   scroll:AddChild(desc)
-
-   -- Spacer
-   local spacer = AceGUI:Create("Label")
-   spacer:SetText(" ")
-   spacer:SetFullWidth(true)
-   scroll:AddChild(spacer)
-
-   -- Ensure DB exists
-   if not FarmGenieDB.vendorRules then
-      FarmGenieDB.vendorRules = { enabled = false, showConfirm = true, rules = {} }
-   end
-
-   -- Enable checkbox
-   local enableCB = AceGUI:Create("CheckBox")
-   enableCB:SetLabel("Enable auto-vendor")
-   enableCB:SetDescription("When enabled, items matching the rules below will be sold at merchants")
-   enableCB:SetFullWidth(true)
-   enableCB:SetValue(FarmGenieDB.vendorRules.enabled)
-   enableCB:SetCallback("OnValueChanged", function(widget, event, value)
-      FarmGenieDB.vendorRules.enabled = value
-   end)
-   scroll:AddChild(enableCB)
-
-   -- Show confirmation checkbox
-   local confirmCB = AceGUI:Create("CheckBox")
-   confirmCB:SetLabel("Show confirmation before selling")
-   confirmCB:SetDescription("Display a window listing items to sell with a Sell All button")
-   confirmCB:SetFullWidth(true)
-   confirmCB:SetValue(FarmGenieDB.vendorRules.showConfirm)
-   confirmCB:SetCallback("OnValueChanged", function(widget, event, value)
-      FarmGenieDB.vendorRules.showConfirm = value
-   end)
-   scroll:AddChild(confirmCB)
-
-   -- Spacer
-   local spacer2 = AceGUI:Create("Label")
-   spacer2:SetText(" ")
-   spacer2:SetFullWidth(true)
-   scroll:AddChild(spacer2)
-
-   -- Rules header
-   local rulesHeader = AceGUI:Create("Heading")
-   rulesHeader:SetText("Vendor Rules")
-   rulesHeader:SetFullWidth(true)
-   scroll:AddChild(rulesHeader)
-
-   -- Draw rules with redraw callback
-   DrawRuleList(scroll, FarmGenieDB.vendorRules, function()
-      if treeGroup then
-         treeGroup:SelectByPath("autovendor")
-      end
-   end)
 end
 
 ---------------------------------------------------------------------------
@@ -555,11 +985,7 @@ DrawDebugPanel = function(container)
    desc:SetFont("Fonts\\FRIZQT__.TTF", 11)
    scroll:AddChild(desc)
 
-   -- Spacer
-   local spacer = AceGUI:Create("Label")
-   spacer:SetText(" ")
-   spacer:SetFullWidth(true)
-   scroll:AddChild(spacer)
+   AddSpacer(scroll)
 
    -- Reset saved variables button
    local resetBtn = AceGUI:Create("Button")
@@ -582,11 +1008,7 @@ DrawDebugPanel = function(container)
    resetDesc:SetFont("Fonts\\FRIZQT__.TTF", 10)
    scroll:AddChild(resetDesc)
 
-   -- Spacer
-   local spacer2 = AceGUI:Create("Label")
-   spacer2:SetText(" ")
-   spacer2:SetFullWidth(true)
-   scroll:AddChild(spacer2)
+   AddSpacer(scroll)
 
    -- Reset window position button
    local resetPosBtn = AceGUI:Create("Button")
@@ -611,11 +1033,7 @@ DrawDebugPanel = function(container)
    posDesc:SetFont("Fonts\\FRIZQT__.TTF", 10)
    scroll:AddChild(posDesc)
 
-   -- Spacer
-   local spacer3 = AceGUI:Create("Label")
-   spacer3:SetText(" ")
-   spacer3:SetFullWidth(true)
-   scroll:AddChild(spacer3)
+   AddSpacer(scroll)
 
    -- Add test items button
    local testBtn = AceGUI:Create("Button")
@@ -634,11 +1052,7 @@ DrawDebugPanel = function(container)
    testDesc:SetFont("Fonts\\FRIZQT__.TTF", 10)
    scroll:AddChild(testDesc)
 
-   -- Spacer
-   local spacer4 = AceGUI:Create("Label")
-   spacer4:SetText(" ")
-   spacer4:SetFullWidth(true)
-   scroll:AddChild(spacer4)
+   AddSpacer(scroll)
 
    -- Loot window info
    local infoHeader = AceGUI:Create("Heading")
@@ -716,7 +1130,7 @@ DrawAboutPanel = function(container)
       parent:AddChild(label)
    end
 
-   AddLine(scroll, "\124cffffcc00Version:\124r 0.2.0")
+   AddLine(scroll, "\124cffffcc00Version:\124r 0.4.0")
    AddLine(scroll, "\124cffffcc00Author:\124r Discord: the_mazer")
    AddLine(scroll, " ")
    AddLine(scroll, "FarmGenie tracks items you loot while farming and shows")
@@ -735,6 +1149,8 @@ DrawAboutPanel = function(container)
    AddLine(scroll, "\124cffffcc00/fg pause\124r — Pause logging")
    AddLine(scroll, "\124cffffcc00/fg resume\124r — Resume logging")
    AddLine(scroll, "\124cffffcc00/fg vendor\124r — Run auto-vendor scan now")
+   AddLine(scroll, "\124cffffcc00/fg clean\124r — Clean bags now (delete matching items)")
+   AddLine(scroll, "\124cffffcc00/fg bank\124r — Deposit matching items to bank")
    AddLine(scroll, "\124cffffcc00/fg help\124r — Show available commands")
 end
 
@@ -743,6 +1159,8 @@ end
 ---------------------------------------------------------------------------
 function FarmGenieToggleMainWindow()
    if mainFrame then
+      CleanupOverlayButtons()
+      CloseConditionPicker()
       AceGUI:Release(mainFrame)
       mainFrame = nil
       treeGroup = nil
@@ -751,7 +1169,7 @@ function FarmGenieToggleMainWindow()
 
    mainFrame = AceGUI:Create("Window")
    mainFrame:SetTitle("FarmGenie")
-   mainFrame:SetWidth(580)
+   mainFrame:SetWidth(700)
    mainFrame:SetHeight(400)
    mainFrame:SetLayout("Fill")
    mainFrame.frame:SetFrameStrata("HIGH")
@@ -760,6 +1178,8 @@ function FarmGenieToggleMainWindow()
    FarmGenieRegisterESC("FarmGenieMainFrame", mainFrame.frame)
 
    mainFrame:SetCallback("OnClose", function(widget)
+      CleanupOverlayButtons()
+      CloseConditionPicker()
       FarmGenieUnregisterESC("FarmGenieMainFrame")
       AceGUI:Release(widget)
       mainFrame = nil
@@ -773,6 +1193,13 @@ function FarmGenieToggleMainWindow()
    treeGroup:SetTree(GetTreeStructure())
    treeGroup:SetCallback("OnGroupSelected", OnGroupSelected)
    mainFrame:AddChild(treeGroup)
+
+   -- Expand Bag Cleanup tree node by default
+   local status = treeGroup.status or treeGroup.localstatus
+   if status and status.groups then
+      status.groups["bagcleanup"] = true
+   end
+   treeGroup:RefreshTree()
 
    -- Default to General panel
    treeGroup:SelectByPath("general")
@@ -825,6 +1252,18 @@ SlashCmdList["FARMGENIE"] = function(msg)
       else
          FarmGeniePrint("Auto-vendor not loaded.")
       end
+   elseif msg == "clean" then
+      if FarmGenieCleanBags then
+         FarmGenieCleanBags()
+      else
+         FarmGeniePrint("Bag cleanup not loaded.")
+      end
+   elseif msg == "bank" then
+      if FarmGenieProcessAutoBank then
+         FarmGenieProcessAutoBank()
+      else
+         FarmGeniePrint("Bag cleanup not loaded.")
+      end
    elseif msg == "help" then
       FarmGeniePrint("Commands:")
       FarmGeniePrint("  /fg — Toggle settings window")
@@ -834,6 +1273,8 @@ SlashCmdList["FARMGENIE"] = function(msg)
       FarmGeniePrint("  /fg pause — Pause logging")
       FarmGeniePrint("  /fg resume — Resume logging")
       FarmGeniePrint("  /fg vendor — Run auto-vendor scan")
+      FarmGeniePrint("  /fg clean — Clean bags now")
+      FarmGeniePrint("  /fg bank — Deposit matching items to bank")
       FarmGeniePrint("  /fg help — Show this help")
    else
       FarmGeniePrint("Unknown command: " .. msg .. ". Type /fg help for commands.")

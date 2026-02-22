@@ -136,9 +136,9 @@ end
 ---------------------------------------------------------------------------
 local function CreateLootLabel(entry)
    local label = AceGUI:Create("InteractiveLabel")
-   local priceText = FarmGenieFormatMoneyColored(entry.displayPrice)
+   local priceText = (entry.displayPrice and entry.displayPrice > 0) and ("  " .. FarmGenieFormatMoneyColored(entry.displayPrice)) or ""
    local qtyText = entry.quantity > 1 and (" x" .. entry.quantity) or ""
-   label:SetText(" " .. entry.link .. qtyText .. "  " .. priceText)
+   label:SetText(" " .. entry.link .. qtyText .. priceText)
    label:SetFullWidth(true)
    label:SetFont("Fonts\\FRIZQT__.TTF", 11)
 
