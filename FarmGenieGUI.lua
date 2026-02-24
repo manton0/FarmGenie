@@ -110,6 +110,27 @@ end
 ---------------------------------------------------------------------------
 local conditionPickerFrame = nil
 local overlayButtons = {}
+local rulesScrollValue = nil   -- saved scroll position for rules panel redraw
+local pendingConfirmAction = nil
+
+StaticPopupDialogs["FARMGENIE_CONFIRM_DELETE"] = {
+   text = "%s",
+   button1 = "Delete",
+   button2 = "Cancel",
+   OnAccept = function()
+      if pendingConfirmAction then
+         pendingConfirmAction()
+         pendingConfirmAction = nil
+      end
+   end,
+   OnCancel = function()
+      pendingConfirmAction = nil
+   end,
+   timeout = 0,
+   whileDead = true,
+   hideOnEscape = true,
+   preferredIndex = 3,
+}
 
 local function CleanupOverlayButtons()
    for i = 1, #overlayButtons do
@@ -602,8 +623,12 @@ local function DrawConditionCard(parent, rule, condIndex, cond, redraw)
 
    -- Delete condition overlay button
    CreateOverlayButton(condCard, -10, -25, TEXTURE_CLOSE, function()
-      table.remove(rule.conditions, condIndex)
-      redraw()
+      pendingConfirmAction = function()
+         table.remove(rule.conditions, condIndex)
+         redraw()
+      end
+      StaticPopup_Show("FARMGENIE_CONFIRM_DELETE",
+         "Remove this condition (" .. (cond.subject or "?") .. ")?")
    end)
 end
 
@@ -885,8 +910,12 @@ local function DrawRuleCard(parent, rule, index, totalRules, redraw)
 
    -- Overlay buttons: delete, move up, move down
    CreateOverlayButton(card, -10, -25, TEXTURE_CLOSE, function()
-      table.remove(bc.rules, index)
-      redraw()
+      pendingConfirmAction = function()
+         table.remove(bc.rules, index)
+         redraw()
+      end
+      StaticPopup_Show("FARMGENIE_CONFIRM_DELETE",
+         "Delete Rule #" .. index .. " (" .. actionLabel .. ")?")
    end)
 
    if index > 1 then
@@ -930,6 +959,11 @@ DrawRulesPanel = function(container)
    AddSpacer(scroll)
 
    local function redraw()
+      -- Save scroll position before the full panel rebuild
+      local status = scroll.status or scroll.localstatus
+      if status then
+         rulesScrollValue = status.scrollvalue
+      end
       if treeGroup then treeGroup:SelectByPath("bagcleanup\001rules") end
    end
 
@@ -961,6 +995,17 @@ DrawRulesPanel = function(container)
    infoLabel:SetFullWidth(true)
    infoLabel:SetFont("Fonts\\FRIZQT__.TTF", 10)
    scroll:AddChild(infoLabel)
+
+   -- Restore scroll position after a redraw (deferred one frame so layout completes)
+   if rulesScrollValue then
+      local pending = rulesScrollValue
+      rulesScrollValue = nil
+      local restoreFrame = CreateFrame("Frame")
+      restoreFrame:SetScript("OnUpdate", function(self)
+         self:SetScript("OnUpdate", nil)
+         scroll:SetScroll(pending)
+      end)
+   end
 end
 
 ---------------------------------------------------------------------------
