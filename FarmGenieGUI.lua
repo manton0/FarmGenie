@@ -96,7 +96,7 @@ local ACTION_ORDER = { "keep", "delete", "sell", "bank" }
 local function GetTreeStructure()
    return {
       { value = "general",    text = "General",     icon = "Interface\\Icons\\INV_Misc_Gear_01" },
-      { value = "filters",    text = "Filters",     icon = "Interface\\Icons\\INV_Misc_Spyglass_02" },
+      { value = "filters",    text = "Loot Log",     icon = "Interface\\Icons\\INV_Misc_Spyglass_02" },
       { value = "bagcleanup", text = "Bag Cleanup", icon = "Interface\\Icons\\INV_Misc_Bag_10", children = {
          { value = "rules", text = "Rules", icon = "Interface\\Icons\\INV_Misc_Note_01" },
       }},
@@ -251,7 +251,7 @@ DrawGeneralPanel = function(container)
 end
 
 ---------------------------------------------------------------------------
--- Filters Panel
+-- Loot Log Panel
 ---------------------------------------------------------------------------
 DrawFiltersPanel = function(container)
    local scroll = AceGUI:Create("ScrollFrame")
@@ -262,12 +262,12 @@ DrawFiltersPanel = function(container)
 
    -- Header
    local header = AceGUI:Create("Heading")
-   header:SetText("Loot Filters")
+   header:SetText("Loot Log Settings")
    header:SetFullWidth(true)
    scroll:AddChild(header)
 
    local desc = AceGUI:Create("Label")
-   desc:SetText("  Filters apply to newly looted items. Existing session items are not affected.")
+   desc:SetText("  Controls which looted items appear in the loot log window. Does not affect bag cleanup rules.")
    desc:SetFullWidth(true)
    desc:SetFont("Fonts\\FRIZQT__.TTF", 11)
    scroll:AddChild(desc)
