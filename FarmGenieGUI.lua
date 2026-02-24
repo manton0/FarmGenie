@@ -1175,7 +1175,7 @@ DrawAboutPanel = function(container)
       parent:AddChild(label)
    end
 
-   AddLine(scroll, "\124cffffcc00Version:\124r 0.5.0")
+   AddLine(scroll, "\124cffffcc00Version:\124r 0.5.1")
    AddLine(scroll, "\124cffffcc00Author:\124r Discord: the_mazer")
    AddLine(scroll, " ")
    AddLine(scroll, "FarmGenie tracks items you loot while farming and shows")
